@@ -1,0 +1,98 @@
+name: Build
+
+# Run manually from the Actions tab. Publishing creates a GitHub release tagged v<version>
+# with the DMG attached; the app's built-in update check reads the latest release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build (e.g. 1.2.0). Leave empty to use scripts/build-app.sh's default.
+        required: false
+        type: string
+      publish:
+        description: Publish a GitHub release (otherwise only upload a workflow artifact)
+        required: true
+        type: boolean
+        default: true
+      notes:
+        description: Release notes (Markdown, optional)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build DMG (arm64)
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app && swift --version
+
+      - name: Install ripgrep for make test
+        run: command -v rg >/dev/null || brew install ripgrep
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          v="${{ inputs.version }}"
+          if [ -z "$v" ]; then v="$(sed -n 's/^VERSION="\${VERSION:-\(.*\)}"$/\1/p' scripts/build-app.sh)"; fi
+          [ -n "$v" ] || { echo "could not resolve version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building UsageBar $v"
+
+      - name: Regression tests
+        run: make test
+
+      - name: Build app bundle
+        run: VERSION="${{ steps.version.outputs.version }}" scripts/build-app.sh
+
+      - name: Package DMG
+        id: dmg
+        run: VERSION="${{ steps.version.outputs.version }}" scripts/build-dmg.sh
+
+      - name: Render previews
+        run: |
+          .build/release/UsageBar --render-preview build/preview-popover.png --render-dashboard build/preview-dashboard.png || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: |
+            ${{ steps.dmg.outputs.dmg }}
+            ${{ steps.dmg.outputs.dmg }}.sha256
+            build/preview-*.png
+          if-no-files-found: error
+
+      - name: Publish release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DMG: ${{ steps.dmg.outputs.dmg }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          sha="$(cut -d' ' -f1 "${DMG}.sha256")"
+          {
+            if [ -n "$NOTES" ]; then printf '%s\n\n' "$NOTES"; fi
+            printf 'Apple silicon build, ad-hoc signed (not notarized): right-click → Open on first launch, or `xattr -d com.apple.quarantine`.\n\n'
+            printf 'SHA-256 `%s`\n' "$sha"
+          } > release-notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$DMG" "${DMG}.sha256" --clobber
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" "$DMG" "${DMG}.sha256" --title "UsageBar ${VERSION}" --notes-file release-notes.md --target "$GITHUB_SHA"
+          fi
