@@ -71,10 +71,10 @@ final class UsageStore: ObservableObject {
         }.store(in: &cancellables)
 
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.now = Date() }
+            Task { @MainActor [weak self] in self?.now = Date() }
         }
         liveTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.refreshLiveSessions()
                 await self?.sleepControl.refresh()
             }
@@ -84,7 +84,7 @@ final class UsageStore: ObservableObject {
         Task { await refreshAll() }
         scanActivity()
         activityTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.scanActivity() }
+            Task { @MainActor [weak self] in self?.scanActivity() }
         }
     }
 
@@ -92,7 +92,7 @@ final class UsageStore: ObservableObject {
         refreshTimer?.invalidate()
         let interval = TimeInterval(max(10, settings.refreshInterval))
         refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refreshAll() }
+            Task { @MainActor [weak self] in await self?.refreshAll() }
         }
     }
 

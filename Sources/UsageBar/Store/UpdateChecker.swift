@@ -57,7 +57,7 @@ final class UpdateChecker: ObservableObject {
         guard AppSettings.isBundled, !RenderFlags.isRendering else { return }
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.checkIfDue(settings: settings) }
+            Task { @MainActor [weak self] in await self?.checkIfDue(settings: settings) }
         }
         Task { try? await Task.sleep(nanoseconds: 15_000_000_000); await checkIfDue(settings: settings) }
     }
@@ -113,7 +113,7 @@ final class UpdateChecker: ObservableObject {
             let destination = downloads.appendingPathComponent(latest.dmg.lastPathComponent)
             let progress = Progress(totalUnitCount: 100)
             let observation = progress.observe(\.fractionCompleted) { [weak self] p, _ in
-                Task { @MainActor in if case .downloading = self?.phase { self?.phase = .downloading(p.fractionCompleted) } }
+                Task { @MainActor [weak self] in if case .downloading = self?.phase { self?.phase = .downloading(p.fractionCompleted) } }
             }
             defer { observation.invalidate() }
             let (temporary, response) = try await HTTP.session.download(from: latest.dmg, progress: progress)
