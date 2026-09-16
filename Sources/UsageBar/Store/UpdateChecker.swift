@@ -4,7 +4,7 @@ import Combine
 import CryptoKit
 
 /// Checks GitHub releases for a newer build and downloads the DMG on request.
-/// Only the public releases endpoint is contacted, and only if automatic checks are on or the user asks.
+/// Uses public GitHub endpoints, and only if automatic checks are on or the user asks.
 @MainActor
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
@@ -26,11 +26,22 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var latest: Release?
     @Published private(set) var phase = Phase.idle
     @Published private(set) var lastChecked: Date?
+    @Published private var lastCheckFoundNoRelease = false
     private var timer: Timer?
+    typealias Request = (URL, [String: String]) async throws -> (Data, HTTPURLResponse)
+    private let defaults: UserDefaults
+    private let request: Request
+    private var apiRetryAfter: Date?
 
-    private init() {
-        lastChecked = UserDefaults.standard.object(forKey: "updateLastChecked") as? Date
+    init(defaults: UserDefaults = .standard,
+         request: @escaping Request = { try await HTTP.request($0, headers: $1) }) {
+        self.defaults = defaults
+        self.request = request
+        lastChecked = defaults.object(forKey: "updateLastChecked") as? Date
+        apiRetryAfter = defaults.object(forKey: "updateAPIRetryAfter") as? Date
     }
+
+    var hasNoPublishedRelease: Bool { latest == nil && lastCheckFoundNoRelease && phase == .idle }
 
     static var currentVersion: String? { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String }
     var isUpdateAvailable: Bool {
@@ -74,34 +85,96 @@ final class UpdateChecker: ObservableObject {
     }
 
     func check() async {
-        guard phase != .checking else { return }
+        guard phaseForDownload == .idle else { return }
+        lastCheckFoundNoRelease = false
         phase = .checking
         defer { if phase == .checking { phase = .idle } }
         do {
-            let (data, response) = try await HTTP.request(Self.latestAPI, headers: ["X-GitHub-Api-Version": "2022-11-28"])
-            guard response.statusCode != 404 else {
-                latest = nil
-                lastChecked = Date(); UserDefaults.standard.set(lastChecked, forKey: "updateLastChecked")
-                return
+            if let apiRetryAfter, apiRetryAfter > Date() {
+                latest = try await publicRelease()
+            } else {
+                let (data, response) = try await request(Self.latestAPI, ["X-GitHub-Api-Version": "2022-11-28"])
+                switch response.statusCode {
+                case 200:
+                    let json = try HTTP.jsonObject(data)
+                    guard let tag = json.string("tag_name"), let page = json.string("html_url").flatMap(URL.init(string:)) else {
+                        throw ProviderError(.parse, "Release is missing a tag")
+                    }
+                    let assets = (json.array("assets") ?? []).compactMap { ($0 as? JSON)?.string("browser_download_url").flatMap(URL.init(string:)) }
+                    latest = try Self.release(tag: tag, page: page, assets: assets,
+                                              notes: json.string("body") ?? "", published: Format.parseISO(json.string("published_at")))
+                    apiRetryAfter = nil
+                    defaults.removeObject(forKey: "updateAPIRetryAfter")
+                case 404:
+                    latest = nil
+                case 403, 429:
+                    // Shared networks can exhaust the anonymous API quota. Honor its cooldown,
+                    // including across launches, and use the public release page in the meantime.
+                    rememberAPICooldown(response)
+                    latest = try await publicRelease()
+                default:
+                    throw ProviderError(.network, "GitHub returned HTTP \(response.statusCode). Try again later.")
+                }
             }
-            guard response.statusCode == 200 else { throw ProviderError(.network, "GitHub returned HTTP \(response.statusCode)") }
-            let json = try HTTP.jsonObject(data)
-            guard let tag = json.string("tag_name"), let page = json.string("html_url").flatMap(URL.init(string:)) else {
-                throw ProviderError(.parse, "Release is missing a tag")
-            }
-            let assets = (json.array("assets") ?? []).compactMap { $0 as? JSON }
-            func asset(_ suffix: String) -> URL? {
-                assets.first { ($0.string("name") ?? "").hasSuffix(suffix) }?.string("browser_download_url").flatMap(URL.init(string:))
-            }
-            guard let dmg = asset(".dmg") else { throw ProviderError(.parse, "Release \(tag) has no DMG attached") }
-            latest = Release(version: String(tag.drop { $0 == "v" }), notes: json.string("body") ?? "", page: page, dmg: dmg,
-                             checksum: asset(".sha256"), published: Format.parseISO(json.string("published_at")))
+            lastCheckFoundNoRelease = latest == nil
             lastChecked = Date()
-            UserDefaults.standard.set(lastChecked, forKey: "updateLastChecked")
+            defaults.set(lastChecked, forKey: "updateLastChecked")
             phase = .idle
         } catch {
             phase = .failed((error as? ProviderError)?.message ?? error.localizedDescription)
         }
+    }
+
+    private func rememberAPICooldown(_ response: HTTPURLResponse) {
+        let now = Date()
+        var retryAt = now.addingTimeInterval(60)
+        if response.value(forHTTPHeaderField: "X-RateLimit-Remaining") == "0",
+           let reset = response.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap(TimeInterval.init) {
+            retryAt = max(retryAt, Date(timeIntervalSince1970: reset))
+        }
+        if let seconds = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init) {
+            retryAt = max(retryAt, now.addingTimeInterval(seconds))
+        }
+        apiRetryAfter = retryAt
+        defaults.set(retryAt, forKey: "updateAPIRetryAfter")
+    }
+
+    private func publicRelease() async throws -> Release? {
+        let headers = ["Accept": "text/html"]
+        let (_, response) = try await request(Self.releasesPage.appendingPathComponent("latest"), headers)
+        if response.statusCode == 404 { return nil }
+        let tagPrefix = "/\(Self.repository)/releases/tag/"
+        guard response.statusCode == 200, let page = response.url,
+              page.scheme == "https", page.host == "github.com", page.path.hasPrefix(tagPrefix) else {
+            throw ProviderError(.network, "Could not check GitHub releases. Try again later or open Releases.")
+        }
+        let tag = String(page.path.dropFirst(tagPrefix.count))
+        guard !tag.isEmpty else { throw ProviderError(.parse, "Release is missing a tag") }
+        // GitHub renders the release's download links in this lazy-loaded public fragment.
+        let assetPage = Self.releasesPage.appendingPathComponent("expanded_assets").appendingPathComponent(tag)
+        let (data, assetsResponse) = try await request(assetPage, headers)
+        guard assetsResponse.statusCode == 200 else {
+            throw ProviderError(.network, "Could not load release downloads. Try again later or open Releases.")
+        }
+        let html = String(decoding: data, as: UTF8.self)
+        let links = try NSRegularExpression(pattern: #"href=["']([^"']+)["']"#)
+        let assets = links.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match -> URL? in
+            guard let range = Range(match.range(at: 1), in: html) else { return nil }
+            let href = String(html[range]).replacingOccurrences(of: "&amp;", with: "&")
+            return URL(string: href, relativeTo: page)?.absoluteURL
+        }
+        return try Self.release(tag: tag, page: page, assets: assets)
+    }
+
+    private static func release(tag: String, page: URL, assets: [URL], notes: String = "", published: Date? = nil) throws -> Release {
+        let prefix = "/\(repository)/releases/download/\(tag)/"
+        let downloads = assets.filter { $0.scheme == "https" && $0.host == "github.com" && $0.path.hasPrefix(prefix) }
+        guard let dmg = downloads.first(where: { $0.pathExtension == "dmg" }) else {
+            throw ProviderError(.parse, "Release \(tag) has no DMG attached")
+        }
+        let checksum = downloads.first { $0.lastPathComponent == dmg.lastPathComponent + ".sha256" }
+        return Release(version: String(tag.drop { $0 == "v" || $0 == "V" }), notes: notes, page: page, dmg: dmg,
+                       checksum: checksum, published: published)
     }
 
     /// Downloads the DMG to ~/Downloads, verifies the published SHA-256 when available, then mounts it.

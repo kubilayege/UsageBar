@@ -101,7 +101,7 @@ struct UpdateSettingsRows: View {
                 .disabled(updates.phase == .checking)
             Spacer()
             if let checked = updates.lastChecked {
-                Text("Checked \(Format.relative(checked))").font(.caption).foregroundStyle(.secondary)
+                Text("Last success \(Format.relative(checked))").font(.caption).foregroundStyle(.secondary)
             }
         }
         if let latest = updates.latest {
@@ -135,15 +135,16 @@ struct UpdateSettingsRows: View {
                         }
                     }
                 }
-            } else {
+            } else if updates.phase == .idle {
                 Text("You have the latest release (\(latest.version)).").font(.caption).foregroundStyle(.secondary)
             }
-        } else if updates.lastChecked != nil, updates.phase != .checking {
+        } else if updates.hasNoPublishedRelease {
             Text("No published release found yet.").font(.caption).foregroundStyle(.secondary)
         }
         if case .failed(let message) = updates.phase {
             Text(message).font(.caption).foregroundStyle(Theme.caution)
         }
+        Link("Open Releases", destination: UpdateChecker.releasesPage).font(.caption)
         Text("Releases are built by the GitHub Actions workflow in this repository and downloaded from github.com/\(UpdateChecker.repository).")
             .font(.caption).foregroundStyle(.secondary)
     }

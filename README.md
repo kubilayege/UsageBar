@@ -23,7 +23,7 @@ A native macOS menu bar app that tracks your AI coding-agent quotas in one place
 
 Download the latest DMG from [Releases](https://github.com/kubilayege/UsageBar/releases), open it and drag UsageBar to Applications. Builds are ad-hoc signed and not notarized: on first launch right-click → Open, or run `xattr -d com.apple.quarantine /Applications/UsageBar.app`.
 
-UsageBar checks the GitHub releases API once a day (toggle in **Settings → Updates**) and shows an **Update** chip in the popup when a newer version exists. **Download and open…** saves the DMG to Downloads, verifies its SHA-256 against the published checksum, and mounts it.
+UsageBar checks GitHub releases once a day (toggle in **Settings → Updates**) and shows an **Update** chip in the popup when a newer version exists. If GitHub's anonymous API quota is exhausted, it reads the public release page and download links instead, respecting the API's retry time. **Download and open…** saves the DMG to Downloads, verifies its SHA-256 against the matching published checksum, and mounts it. Only a published release with a higher version triggers an update; workflow artifacts alone do not.
 
 ## Requirements
 
