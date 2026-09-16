@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.applicationIconImage = AppBranding.logo
         // A freshly opened build replaces older copies, preventing duplicate menu icons and cache writers.
         if let bundleID = Bundle.main.bundleIdentifier {
             let current = NSRunningApplication.current
@@ -72,7 +73,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var host: NSHostingController<AnyView>?
     private var lastTitle = NSAttributedString()
-    private let whiteIcon = MenuBarIcon.whiteGauge()
+    private let whiteIcon = MenuBarIcon.whiteLogo()
 
     init(store: UsageStore) {
         self.store = store
@@ -224,13 +225,24 @@ extension Notification.Name {
 
 @MainActor
 enum MenuBarIcon {
-    static func whiteGauge() -> NSImage? {
-        guard let symbol = NSImage(systemSymbolName: "gauge.with.dots.needle.33percent", accessibilityDescription: "UsageBar") else { return nil }
+    static func whiteLogo() -> NSImage {
         // Bake white into a non-template image so Aqua cannot recolor it black.
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-            symbol.draw(in: rect)
+        // Simplify the app artwork to its bars and sparkle for an 18-point menu item.
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.white.setFill()
-            rect.fill(using: .sourceIn)
+            for bar in [NSRect(x: 2, y: 2, width: 4, height: 10),
+                        NSRect(x: 7, y: 2, width: 4, height: 7),
+                        NSRect(x: 12, y: 2, width: 4, height: 14)] {
+                NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+            }
+            let sparkle = NSBezierPath()
+            sparkle.move(to: NSPoint(x: 9, y: 15.5))
+            sparkle.curve(to: NSPoint(x: 11, y: 13), controlPoint1: NSPoint(x: 9.4, y: 13.8), controlPoint2: NSPoint(x: 9.7, y: 13.4))
+            sparkle.curve(to: NSPoint(x: 9, y: 10.5), controlPoint1: NSPoint(x: 9.7, y: 12.6), controlPoint2: NSPoint(x: 9.4, y: 12.2))
+            sparkle.curve(to: NSPoint(x: 7, y: 13), controlPoint1: NSPoint(x: 8.6, y: 12.2), controlPoint2: NSPoint(x: 8.3, y: 12.6))
+            sparkle.curve(to: NSPoint(x: 9, y: 15.5), controlPoint1: NSPoint(x: 8.3, y: 13.4), controlPoint2: NSPoint(x: 8.6, y: 13.8))
+            sparkle.close()
+            sparkle.fill()
             return true
         }
         image.isTemplate = false

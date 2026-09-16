@@ -6,6 +6,17 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack(spacing: 12) {
+                    AppLogoView(size: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("UsageBar").font(.system(size: 19, weight: .bold, design: .rounded))
+                        Text("AI usage at a glance").font(.callout).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            }
             Section("Providers") {
                 ForEach(ProviderID.allCases) { id in
                     Toggle(isOn: Binding(get: { settings.enabledProviders.contains(id) }, set: { _ in settings.toggle(id) })) {

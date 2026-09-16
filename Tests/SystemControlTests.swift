@@ -30,7 +30,7 @@ struct SystemControlTests {
     @MainActor func testWhiteIconAndBankedResets() throws {
         for name in [NSAppearance.Name.aqua, .darkAqua] {
             NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
-                let icon = MenuBarIcon.whiteGauge()!
+                let icon = MenuBarIcon.whiteLogo()
                 XCTAssertEqual(icon.isTemplate, false)
                 let bitmap = NSBitmapImageRep(data: icon.tiffRepresentation!)!
                 var visible = 0

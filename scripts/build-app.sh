@@ -8,6 +8,8 @@ APP_NAME="UsageBar"
 BUNDLE_ID="com.kubilay.usagebar"
 VERSION="${VERSION:-1.2.0}"
 OUT="build/${APP_NAME}.app"
+ICON="Sources/UsageBar/Resources/AppLogo.png"
+[[ -f "$ICON" ]] || { echo "missing app artwork: $ICON"; exit 1; }
 
 swift build -c release 2>&1 | tail -3
 BIN=".build/release/${APP_NAME}"
@@ -16,6 +18,7 @@ BIN=".build/release/${APP_NAME}"
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 cp "$BIN" "$OUT/Contents/MacOS/${APP_NAME}"
+cp "$ICON" "$OUT/Contents/Resources/AppLogo.png"
 
 cat > "$OUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,15 +44,16 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Icon (optional): generate from scripts/icon.png if present.
-if [[ -f scripts/icon.png ]]; then
-  ICONSET="build/AppIcon.iconset"; rm -rf "$ICONSET"; mkdir -p "$ICONSET"
-  for s in 16 32 64 128 256 512; do
-    sips -z $s $s scripts/icon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s*2)) $((s*2)) scripts/icon.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns" && rm -rf "$ICONSET"
-fi
+# Generate every standard macOS icon size from the same artwork used inside the app.
+ICONSET="build/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+  sips -z $s $s "$ICON" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s*2)) $((s*2)) "$ICON" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns"
+rm -rf "$ICONSET"
 
 # Ad-hoc sign so the bundle identity is stable for Keychain / notifications.
 codesign --force --deep --sign - "$OUT"

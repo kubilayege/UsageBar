@@ -7,8 +7,7 @@ struct MenuBarLabelView: View {
         let segments = store.menuBarSegments
         HStack(spacing: 6) {
             if segments.isEmpty {
-                Image(systemName: "gauge.with.dots.needle.33percent")
-                    .foregroundStyle(.white)
+                Image(nsImage: MenuBarIcon.whiteLogo())
             } else {
                 ForEach(segments) { seg in
                     HStack(spacing: 3) {

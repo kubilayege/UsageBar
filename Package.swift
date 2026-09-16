@@ -8,6 +8,7 @@ let package = Package(
         .executableTarget(
             name: "UsageBar",
             path: "Sources/UsageBar",
+            resources: [.process("Resources")],
             swiftSettings: [.unsafeFlags(["-Onone"], .when(configuration: .debug))],
             linkerSettings: [
                 .linkedFramework("IOKit"),

@@ -57,10 +57,7 @@ struct DashboardView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(Theme.chipFill).frame(width: 36, height: 36)
-                    Image(systemName: "sparkles").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.accent)
-                }
+                AppLogoView(size: 36)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("UsageBar").font(.system(size: 15, weight: .bold, design: .rounded)).foregroundStyle(Theme.textPrimary)
                     Text("Dashboard").font(.system(size: 11)).foregroundStyle(Theme.textMuted)

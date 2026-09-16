@@ -46,6 +46,8 @@ swift build && .build/debug/UsageBar          # run without a bundle (no notific
 make preview                                  # render the popover and dashboard to PNG with demo data
 ```
 
+The shared app artwork is [`Sources/UsageBar/Resources/AppLogo.png`](Sources/UsageBar/Resources/AppLogo.png). SwiftPM includes it for development; `make app` embeds it in the bundle and generates the full macOS `AppIcon.icns` size set. The popup, dashboard, and Settings use the same logo, with a simplified white mark in the menu bar. The generation prompt is recorded in [`docs/branding/app-logo.md`](docs/branding/app-logo.md).
+
 ## How each provider is read
 
 | Provider | Credential source | Endpoint |

@@ -38,10 +38,7 @@ struct PopoverView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(Theme.chipFill).frame(width: 48, height: 48)
-                Image(systemName: "sparkles").font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.accent)
-            }
+            AppLogoView(size: 48)
             VStack(alignment: .leading, spacing: 3) {
                 Text("UsageBar")
                     .font(.system(size: 19, weight: .bold, design: .rounded))
