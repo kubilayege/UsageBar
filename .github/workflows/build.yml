@@ -32,7 +32,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Select newest Xcode
         run: |
@@ -68,7 +68,7 @@ jobs:
           .build/release/UsageBar --render-preview build/preview-popover.png --render-dashboard build/preview-dashboard.png || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.dmg.outputs.name }}
           path: |
