@@ -15,7 +15,7 @@ struct AnalysisTurn: Codable, Sendable, Identifiable {
     var modelKey: String { provider.rawValue + "/" + model }
 }
 
-struct ModelRates: Codable, Equatable {
+struct ModelRates: Codable, Equatable, Sendable {
     var input: Double?
     var cached: Double?
     var cacheWrite: Double?
@@ -32,7 +32,7 @@ struct ModelRates: Codable, Equatable {
     }
 }
 
-struct AnalysisRow: Identifiable, Equatable {
+struct AnalysisRow: Identifiable, Equatable, Sendable {
     var provider: ProviderID
     var model: String
     var effort: String?

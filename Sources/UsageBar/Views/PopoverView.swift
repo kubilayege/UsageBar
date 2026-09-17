@@ -240,19 +240,41 @@ struct PopoverView: View {
 
             Spacer(minLength: 0)
 
-            if let version = updates.availableVersion {
-                Button { updates.check() } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.down.circle.fill").font(.system(size: 12))
-                        Text("Update \(version)").font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(ChipButtonStyle())
-                .disabled(!updates.canCheckForUpdates)
-                .help("Review and install UsageBar \(version).")
+            if updates.isEnabled || RenderFlags.isRendering {
+                updateButton
             }
         }
+    }
+
+    /// Round icon button; a dot on the tray means a newer version is ready to review.
+    private var updateButton: some View {
+        let available = updates.availableVersion ?? (RenderFlags.isRendering ? "preview" : nil)
+        return Button { updates.check() } label: {
+            ZStack(alignment: .topTrailing) {
+                Group {
+                    if updates.phase == .checking {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "square.and.arrow.down").font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(available == nil ? Theme.textSecondary : Theme.textPrimary)
+                            .offset(y: -1)
+                    }
+                }
+                .frame(width: 34, height: 34)
+                if available != nil {
+                    Circle().fill(Theme.textPrimary).frame(width: 7, height: 7)
+                        .overlay(Circle().stroke(Theme.bg, lineWidth: 1.5))
+                        .offset(x: -6, y: 6)
+                }
+            }
+            .background(Circle().fill(Theme.chipFill))
+            .overlay(Circle().stroke(Theme.cardStroke, lineWidth: 1))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!updates.canCheckForUpdates && !RenderFlags.isRendering)
+        .accessibilityLabel(available.map { "Update to \($0)" } ?? "Check for updates")
+        .help(available.map { "Update \($0) is ready. Review and install it." } ?? "Check for updates")
     }
 
     private var navigationActions: some View {

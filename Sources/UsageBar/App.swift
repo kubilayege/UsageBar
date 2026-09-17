@@ -334,6 +334,11 @@ enum PreviewRenderer {
             let model = argument("--analysis-model")
             let height = min(6000, max(600, argument("--analysis-height").flatMap(Double.init) ?? 1100))
             if args.contains("--analysis-show-prices") { UsageAnalysisState.shared.previewShowPrices = true }
+            if args.contains("--analysis-skeleton") {
+                render(VStack(alignment: .leading, spacing: 0) { AnalysisSkeleton().padding(28) }
+                    .background(Theme.bg).preferredColorScheme(.dark).frame(width: 1100, height: height), to: args[i + 1])
+                exit(0)
+            }
             let provider = model.flatMap { $0.split(separator: "/").first }.flatMap { ProviderID(rawValue: String($0)) }
             UsageAnalysisState.shared.loadLocalPreview(at: date)
             render(UsageAnalysisView(days: days, provider: provider, model: model,

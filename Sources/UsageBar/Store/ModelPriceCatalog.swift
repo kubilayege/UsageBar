@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 /// Published API list prices in USD per 1 million tokens, from LiteLLM's public price list.
-struct ModelPrice: Codable, Equatable {
+struct ModelPrice: Codable, Equatable, Sendable {
     var input: Double
     var output: Double
     var cached: Double?
@@ -15,7 +15,7 @@ struct ModelPrice: Codable, Equatable {
     }
 }
 
-struct ModelPriceCatalog: Equatable {
+struct ModelPriceCatalog: Equatable, Sendable {
     var models: [String: ModelPrice]
     var updated: Date
     var source: String
@@ -26,12 +26,15 @@ struct ModelPriceCatalog: Equatable {
     /// Accepts the raw LiteLLM file or the trimmed snapshot written by scripts/update-prices.py.
     static func parse(_ data: Data, source: String, now: Date = Date()) -> ModelPriceCatalog? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? JSON else { return nil }
-        let entries = root.dict("models") ?? root
+        // Bridge the models dictionary once; casting it per entry made this parse take most of a second.
+        let snapshot = root.dict("models")
+        let entries = snapshot ?? root
+        let isSnapshot = snapshot != nil
         var models: [String: ModelPrice] = [:]
         for prefixed in [false, true] {
             for (key, value) in entries {
                 guard key != "sample_spec", key.contains("/") == prefixed, let entry = value as? JSON,
-                      root.dict("models") != nil || ["chat", "responses"].contains(entry.string("mode") ?? ""),
+                      isSnapshot || ["chat", "responses"].contains(entry.string("mode") ?? ""),
                       let input = entry.double("input_cost_per_token"), let output = entry.double("output_cost_per_token") else { continue }
                 let name = key.split(separator: "/").last.map { String($0).lowercased() } ?? key
                 guard models[name] == nil else { continue }
@@ -78,16 +81,37 @@ final class ModelPriceStore: ObservableObject {
     @Published private(set) var catalog: ModelPriceCatalog
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
-    private static var cacheURL: URL { Files.appSupport.appendingPathComponent("model-prices.json") }
+    nonisolated private static var cacheURL: URL { Files.appSupport.appendingPathComponent("model-prices.json") }
+
+    /// Reads the bundled list and the downloaded cache off the main thread so opening the tab never waits on them.
+    private var loading: Task<Void, Never>?
 
     private init() {
-        let cached = (try? Data(contentsOf: Self.cacheURL)).flatMap { ModelPriceCatalog.parse($0, source: "cache") }
-        if let cached, cached.updated > ModelPriceCatalog.bundled.updated { catalog = cached } else { catalog = .bundled }
+        if RenderFlags.isRendering {
+            catalog = Self.loadFromDisk()
+            return
+        }
+        catalog = ModelPriceCatalog(models: [:], updated: .distantPast, source: "loading")
+        let task = Task.detached(priority: .userInitiated) { Self.loadFromDisk() }
+        loading = Task { [weak self] in
+            let loaded = await task.value
+            guard let self, self.catalog.source == "loading" else { return }
+            self.catalog = loaded
+        }
+    }
+
+    nonisolated private static func loadFromDisk() -> ModelPriceCatalog {
+        let cached = (try? Data(contentsOf: cacheURL)).flatMap { ModelPriceCatalog.parse($0, source: "cache") }
+        if let cached, cached.updated > ModelPriceCatalog.bundled.updated { return cached }
+        return .bundled
     }
 
     var isStale: Bool { Date().timeIntervalSince(catalog.updated) > 7 * 86400 }
 
-    func refreshIfStale() async { if isStale && !RenderFlags.isRendering { await refresh() } }
+    func refreshIfStale() async {
+        await loading?.value
+        if isStale && !RenderFlags.isRendering { await refresh() }
+    }
 
     func refresh() async {
         guard !isRefreshing else { return }
@@ -117,7 +141,7 @@ final class ModelPriceStore: ObservableObject {
     }
 }
 
-enum PriceSource: Equatable {
+enum PriceSource: Equatable, Sendable {
     case listed(String), custom, missing
     var label: String {
         switch self {

@@ -11,6 +11,8 @@ final class UsageAnalysisState: ObservableObject {
     @Published var monthlyCosts: [String: Double] { didSet { save(monthlyCosts, key: "analysisMonthlyCosts") } }
     /// `--render-analysis --analysis-show-prices` opens the pricing editor in the snapshot.
     var previewShowPrices = false
+    /// Last derivation, kept so returning to the tab does not start from a skeleton again.
+    var cachedDerivation: (key: AnalysisDerivation.Key, value: AnalysisDerived)?
 
     private init() {
         let defaults = RenderFlags.isRendering ? UserDefaults(suiteName: "com.kubilay.usagebar")! : .standard
@@ -89,7 +91,6 @@ struct UsageAnalysisView: View {
     @State private var showRates = false
     @State private var plotResolution = AnalysisCostResolution.average
     @State private var sort = AnalysisRowSort.turns
-    @State private var hoveredRow: String?
 
     init(days: Int = 7, provider: ProviderID? = nil, model: String? = nil,
          resolution: AnalysisCostResolution = .average) {
@@ -105,58 +106,41 @@ struct UsageAnalysisView: View {
     private var end: Date { state.result?.scannedAt ?? Date() }
     private var start: Date { end.addingTimeInterval(-Double(days) * 86400) }
 
-    /// Everything the page shows, computed in one pass over the turns per render.
-    private struct Derived {
-        var providerTurns: [AnalysisTurn] = []
-        var turns: [AnalysisTurn] = []
-        var models: [AnalysisTurn] = []
-        var rates: [String: ModelRates] = [:]
-        var rows: [AnalysisRow] = []
-        var priceSources: [String: PriceSource] = [:]
-        var totalTokens = 0
-        var input = 0, cached = 0, cacheWrite = 0, output = 0
-        var pricedTurnCount = 0
-        var pricedCost = 0.0
-        var turnsByProvider: [ProviderID: Int] = [:]
-        var costByProvider: [ProviderID: Double] = [:]
-        var plot = AnalysisCostPlot(points: [], omittedTurns: 0, isHourly: false)
-        var unpricedModels: [AnalysisTurn] { models.filter { priceSources[$0.modelKey] == .missing } }
+    @State private var derived: AnalysisDerived?
+    @State private var derivedKey: AnalysisDerivation.Key?
+
+    private var derivationKey: AnalysisDerivation.Key {
+        AnalysisDerivation.Key(scannedAt: state.result?.scannedAt, days: days, provider: selectedProvider, model: selectedModel,
+                               sort: sort, resolution: plotResolution, overrides: state.rates,
+                               catalogUpdated: prices.catalog.updated, enabled: settings.enabledProviders)
     }
 
-    private func derive() -> Derived {
-        var d = Derived()
-        let start = start, end = end, enabled = enabled
-        d.providerTurns = (state.result?.turns ?? []).filter { $0.timestamp >= start && $0.timestamp <= end && enabled.contains($0.provider) }
-        d.turns = selectedModel == nil ? d.providerTurns : d.providerTurns.filter { $0.modelKey == selectedModel }
-        let byModel = Dictionary(grouping: d.providerTurns, by: \.modelKey)
-        d.models = byModel.values.compactMap(\.first).sorted { $0.modelKey < $1.modelKey }
-        d.rates = UsageAnalysis.resolvedRates(for: d.models, overrides: state.rates, catalog: prices.catalog)
-        let rows = UsageAnalysis.rows(d.turns, since: start, until: end, enabled: enabled, rates: d.rates)
-        switch sort {
-        case .turns: d.rows = rows.sorted { $0.turns > $1.turns }
-        case .tokens: d.rows = rows.sorted { $0.tokensPerTurn < $1.tokensPerTurn }
-        case .cost: d.rows = rows.sorted { ($0.costPerTurn ?? .infinity, $0.turns) < ($1.costPerTurn ?? .infinity, $1.turns) }
-        }
-        for model in d.models {
-            let priced = byModel[model.modelKey]!.allSatisfy { d.rates[$0.modelKey]?.cost($0) != nil }
-            d.priceSources[model.modelKey] = UsageAnalysis.priceSource(model: model.model, key: model.modelKey, overrides: state.rates,
-                                                                       catalog: prices.catalog, pricedAllTurns: priced)
-        }
-        for turn in d.turns {
-            d.totalTokens += turn.tokens
-            d.input += turn.input; d.cached += turn.cached; d.cacheWrite += turn.cacheWrite; d.output += turn.output
-            d.turnsByProvider[turn.provider, default: 0] += 1
-            if let cost = d.rates[turn.modelKey]?.cost(turn) {
-                d.pricedTurnCount += 1; d.pricedCost += cost
-                d.costByProvider[turn.provider, default: 0] += cost
-            }
-        }
-        d.plot = AnalysisCostPlot.make(d.turns, since: start, until: end, enabled: enabled, rates: d.rates, resolution: plotResolution)
-        return d
+    private func derivationInput(_ key: AnalysisDerivation.Key) -> AnalysisDerivation.Input {
+        AnalysisDerivation.Input(key: key, turns: state.result?.turns ?? [], start: start, end: end, enabled: enabled, catalog: prices.catalog)
     }
+
+    /// Runs the aggregation off the main thread so scrolling and hovering never wait on it.
+    private func derive(_ key: AnalysisDerivation.Key) async {
+        guard state.result != nil else { return }
+        if let cached = state.cachedDerivation, cached.key == key {
+            derived = cached.value; derivedKey = key
+            return
+        }
+        let input = derivationInput(key)
+        let value = await Task.detached(priority: .userInitiated) { AnalysisDerivation.compute(input) }.value
+        guard !Task.isCancelled else { return }
+        state.cachedDerivation = (key, value)
+        derived = value
+        derivedKey = key
+        if let selectedModel, !value.models.contains(where: { $0.modelKey == selectedModel }) { self.selectedModel = nil }
+    }
+
+    /// Whether the visible data is behind the current controls; content dims a little while it catches up.
+    private var isStale: Bool { derived != nil && derivedKey != derivationKey }
 
     var body: some View {
-        let d = derive()
+        let key = derivationKey
+        let d = RenderFlags.isRendering ? AnalysisDerivation.compute(derivationInput(key)) : derived
         return VStack(alignment: .leading, spacing: 0) {
             header(d).padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 16)
             controls(d).padding(.horizontal, 28).padding(.bottom, 18)
@@ -166,26 +150,32 @@ struct UsageAnalysisView: View {
                     if let result = state.result, result.unreadableFiles > 0 {
                         notice("\(result.unreadableFiles) log files could not be read. Results cover the accessible logs.")
                     }
-                    if d.rows.isEmpty {
-                        emptyState
+                    if let d {
+                        if d.rows.isEmpty {
+                            emptyState
+                        } else {
+                            overview(d)
+                            UsageCostChart(plot: d.plot, start: start, end: end, resolution: $plotResolution,
+                                           onFixPrices: { withAnimation(.snappy) { showRates = true } })
+                            highlights(d)
+                            modelTable(d)
+                            subscriptionCard(d)
+                            pricingCard(d)
+                            footnote
+                        }
                     } else {
-                        overview(d)
-                        UsageCostChart(plot: d.plot, start: start, end: end, resolution: $plotResolution,
-                                       onFixPrices: { withAnimation(.snappy) { showRates = true } })
-                        highlights(d)
-                        modelTable(d)
-                        subscriptionCard(d)
-                        pricingCard(d)
-                        footnote
+                        AnalysisSkeleton()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 28)
+                .opacity(isStale ? 0.6 : 1)
+                .animation(.easeOut(duration: 0.15), value: isStale)
             }
         }
         .background(Theme.bg).foregroundStyle(Theme.textPrimary).preferredColorScheme(.dark)
         .onChange(of: selectedProvider) { _, _ in selectedModel = nil }
-        .onChange(of: days) { _, _ in if let selectedModel, !derive().models.contains(where: { $0.modelKey == selectedModel }) { self.selectedModel = nil } }
+        .task(id: key) { await derive(key) }
         .task {
             if state.result == nil && !RenderFlags.isRendering { await state.analyze() }
             await prices.refreshIfStale()
@@ -194,7 +184,7 @@ struct UsageAnalysisView: View {
 
     // MARK: Header & controls
 
-    private func header(_ d: Derived) -> some View {
+    private func header(_ d: AnalysisDerived?) -> some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Usage & effort").font(.system(size: 26, weight: .bold, design: .rounded))
@@ -221,7 +211,7 @@ struct UsageAnalysisView: View {
         }
     }
 
-    private func controls(_ d: Derived) -> some View {
+    private func controls(_ d: AnalysisDerived?) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
                 ForEach(Self.presets, id: \.self) { preset in
@@ -241,8 +231,8 @@ struct UsageAnalysisView: View {
             }.labelsHidden().frame(width: 150)
             Picker("Model", selection: $selectedModel) {
                 Text("All models").tag(nil as String?)
-                ForEach(d.models) { Text("\($0.provider.displayName) · \($0.model)").tag(Optional($0.modelKey)) }
-            }.labelsHidden().frame(maxWidth: 320)
+                ForEach(d?.models ?? []) { Text("\($0.provider.displayName) · \($0.model)").tag(Optional($0.modelKey)) }
+            }.labelsHidden().frame(maxWidth: 320).disabled(d == nil)
             Spacer()
         }
     }
@@ -293,7 +283,7 @@ struct UsageAnalysisView: View {
 
     // MARK: Overview
 
-    private func overview(_ d: Derived) -> some View {
+    private func overview(_ d: AnalysisDerived) -> some View {
         let count = d.turns.count
         let priced = d.pricedTurnCount
         let coverage = count == 0 ? 0 : Double(priced) / Double(count)
@@ -320,7 +310,7 @@ struct UsageAnalysisView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func cacheShare(_ d: Derived) -> String {
+    private func cacheShare(_ d: AnalysisDerived) -> String {
         let input = d.input + d.cached + d.cacheWrite
         return input > 0 ? "\(Int((100 * Double(d.cached) / Double(input)).rounded()))%" : "—"
     }
@@ -351,7 +341,7 @@ struct UsageAnalysisView: View {
 
     // MARK: Highlights
 
-    private func highlights(_ d: Derived) -> some View {
+    private func highlights(_ d: AnalysisDerived) -> some View {
         let rows = d.rows, unpriced = d.unpricedModels
         let total = rows.reduce(0) { $0 + $1.turns }
         let mostUsed = rows.max { $0.turns < $1.turns }
@@ -421,7 +411,7 @@ struct UsageAnalysisView: View {
 
     // MARK: Table
 
-    private func modelTable(_ d: Derived) -> some View {
+    private func modelTable(_ d: AnalysisDerived) -> some View {
         let rows = d.rows
         let total = rows.reduce(0) { $0 + $1.turns }
         let maxTurns = rows.map(\.turns).max() ?? 1
@@ -439,55 +429,23 @@ struct UsageAnalysisView: View {
                 .padding(3)
                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
             }
-            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 0) {
-                GridRow {
-                    Text("Model · effort").gridColumnAlignment(.leading).frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
-                    Text("Turns").gridColumnAlignment(.leading).frame(width: 96, alignment: .leading)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Model · effort").frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                    Text("Turns").frame(width: 96, alignment: .leading)
                     Text("Tokens / turn").frame(width: 84, alignment: .trailing)
                     Text("Est. $ / turn").frame(width: 92, alignment: .trailing)
                     Text("Est. total").frame(width: 72, alignment: .trailing)
-                    Text("Price").gridColumnAlignment(.leading).frame(width: 56, alignment: .leading)
+                    Text("Price").frame(width: 56, alignment: .leading)
                 }
                 .font(.system(size: 10, weight: .semibold)).tracking(0.4).foregroundStyle(Theme.textMuted)
                 .padding(.bottom, 8).padding(.horizontal, 10)
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    let hovered = hoveredRow == row.id
-                    let lowSample = row.turns < 5
-                    GridRow {
-                        HStack(spacing: 9) {
-                            ProviderDot(id: row.provider, size: 7)
-                            Text(row.model).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
-                            EffortPill(effort: row.effort).fixedSize()
-                            if lowSample {
-                                Image(systemName: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(Theme.caution)
-                                    .help("Fewer than 5 turns: too few to compare")
-                            }
-                        }.frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                Text(row.turns.formatted()).foregroundStyle(lowSample ? Theme.caution : Theme.textPrimary)
-                                Text(total > 0 ? "\(Int((Double(row.turns) / Double(total) * 100).rounded()))%" : "")
-                                    .font(.system(size: 10)).foregroundStyle(Theme.textMuted)
-                            }
-                            MiniBar(fraction: Double(row.turns) / Double(max(1, maxTurns)), color: row.provider.color, width: 80)
-                        }
-                        .frame(width: 96, alignment: .leading)
-                        Text(Format.tokens(Int(row.tokensPerTurn))).frame(width: 84, alignment: .trailing)
-                        VStack(alignment: .trailing, spacing: 5) {
-                            Text(money(row.costPerTurn, 4)).foregroundStyle(row.costPerTurn == nil ? Theme.textMuted : Theme.textPrimary)
-                            MiniBar(fraction: maxCost > 0 ? (row.costPerTurn ?? 0) / maxCost : 0, color: EffortStyle.color(row.effort), width: 56)
-                        }
-                        .frame(width: 92, alignment: .trailing)
-                        Text(money(row.cost, 2)).foregroundStyle(row.cost == nil ? Theme.textMuted : Theme.textSecondary).frame(width: 72, alignment: .trailing)
-                        priceBadge(d.priceSources[row.provider.rawValue + "/" + row.model] ?? .missing)
-                            .gridColumnAlignment(.leading).frame(width: 56, alignment: .leading)
-                    }
-                    .padding(.vertical, 9).padding(.horizontal, 10)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hovered ? Color.white.opacity(0.04) : .clear))
-                    .contentShape(Rectangle())
-                    .onHover { inside in hoveredRow = inside ? row.id : (hoveredRow == row.id ? nil : hoveredRow) }
+                    AnalysisTableRow(row: row, total: total, maxTurns: maxTurns, maxCost: maxCost,
+                                     source: d.priceSources[row.provider.rawValue + "/" + row.model] ?? .missing,
+                                     onAddPrice: { withAnimation(.snappy) { showRates = true } })
                     if index < rows.count - 1 {
-                        Rectangle().fill(Theme.divider).frame(height: 1).gridCellUnsizedAxes(.horizontal).padding(.horizontal, 10)
+                        Rectangle().fill(Theme.divider).frame(height: 1).padding(.horizontal, 10)
                     }
                 }
             }
@@ -498,24 +456,10 @@ struct UsageAnalysisView: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
     }
 
-    private func priceBadge(_ source: PriceSource) -> some View {
-        Group {
-            switch source {
-            case .listed(let name):
-                Badge(text: "List", color: Theme.ok).help("LiteLLM list price for “\(name)”")
-            case .custom:
-                Badge(text: "Custom", color: Theme.accent).help("Uses one or more rates you entered")
-            case .missing:
-                Button { withAnimation(.snappy) { showRates = true } } label: { Badge(text: "Add", color: Theme.caution) }
-                    .buttonStyle(.plain).help("No list price matched this model. Enter rates in Pricing.")
-            }
-        }
-    }
-
     // MARK: Subscription
 
-    private func subscriptionCard(_ d: Derived) -> some View {
-        let counts = Dictionary(grouping: d.providerTurns, by: \.provider).mapValues(\.count)
+    private func subscriptionCard(_ d: AnalysisDerived) -> some View {
+        let counts = d.turnCountByProvider
         let providers = settings.orderedEnabledProviders.filter { enabled.contains($0) }
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
@@ -564,7 +508,7 @@ struct UsageAnalysisView: View {
 
     // MARK: Pricing
 
-    private func pricingCard(_ d: Derived) -> some View {
+    private func pricingCard(_ d: AnalysisDerived) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { withAnimation(.snappy) { showRates.toggle() } } label: {
                 HStack(spacing: 12) {
@@ -588,14 +532,14 @@ struct UsageAnalysisView: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
     }
 
-    private func pricingSummary(_ d: Derived) -> String {
+    private func pricingSummary(_ d: AnalysisDerived) -> String {
         let models = d.models, unpricedModels = d.unpricedModels
         let listed = models.count - unpricedModels.count
         let missing = unpricedModels.isEmpty ? "" : " · \(unpricedModels.count) without a price"
         return "\(listed) of \(models.count) models priced\(missing) · LiteLLM list from \(prices.catalog.updated.formatted(date: .abbreviated, time: .omitted))"
     }
 
-    private func costEditor(_ d: Derived) -> some View {
+    private func costEditor(_ d: AnalysisDerived) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -690,6 +634,179 @@ struct UsageAnalysisView: View {
 }
 
 // MARK: - Building blocks
+
+/// One table row. Hover state lives here so moving the mouse never re-renders the page or re-aggregates turns.
+struct AnalysisTableRow: View {
+    var row: AnalysisRow
+    var total: Int
+    var maxTurns: Int
+    var maxCost: Double
+    var source: PriceSource
+    var onAddPrice: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        let lowSample = row.turns < 5
+        HStack(spacing: 12) {
+            HStack(spacing: 9) {
+                ProviderDot(id: row.provider, size: 7)
+                Text(row.model).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                EffortPill(effort: row.effort).fixedSize()
+                if lowSample {
+                    Image(systemName: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(Theme.caution)
+                        .help("Fewer than 5 turns: too few to compare")
+                }
+            }.frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(row.turns.formatted()).foregroundStyle(lowSample ? Theme.caution : Theme.textPrimary)
+                    Text(total > 0 ? "\(Int((Double(row.turns) / Double(total) * 100).rounded()))%" : "")
+                        .font(.system(size: 10)).foregroundStyle(Theme.textMuted)
+                }
+                MiniBar(fraction: Double(row.turns) / Double(max(1, maxTurns)), color: row.provider.color, width: 80)
+            }
+            .frame(width: 96, alignment: .leading)
+            Text(Format.tokens(Int(row.tokensPerTurn))).frame(width: 84, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 5) {
+                Text(money(row.costPerTurn, 4)).foregroundStyle(row.costPerTurn == nil ? Theme.textMuted : Theme.textPrimary)
+                MiniBar(fraction: maxCost > 0 ? (row.costPerTurn ?? 0) / maxCost : 0, color: EffortStyle.color(row.effort), width: 56)
+            }
+            .frame(width: 92, alignment: .trailing)
+            Text(money(row.cost, 2)).foregroundStyle(row.cost == nil ? Theme.textMuted : Theme.textSecondary).frame(width: 72, alignment: .trailing)
+            priceBadge.frame(width: 56, alignment: .leading)
+        }
+        .padding(.vertical, 9).padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hovered ? Color.white.opacity(0.04) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+    }
+
+    @ViewBuilder private var priceBadge: some View {
+        switch source {
+        case .listed(let name):
+            Badge(text: "List", color: Theme.ok).help("LiteLLM list price for “\(name)”")
+        case .custom:
+            Badge(text: "Custom", color: Theme.accent).help("Uses one or more rates you entered")
+        case .missing:
+            Button(action: onAddPrice) { Badge(text: "Add", color: Theme.caution) }
+                .buttonStyle(.plain).help("No list price matched this model. Enter rates in Pricing.")
+        }
+    }
+
+    private func money(_ value: Double?, _ digits: Int) -> String { value.map { String(format: "$%.\(digits)f", $0) } ?? "—" }
+}
+
+/// Wireframe stand-ins shown while logs are read and aggregated in the background.
+struct AnalysisSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(0..<3, id: \.self) { _ in
+                    card(height: 118) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                SkeletonBlock(width: 96, height: 26)
+                                SkeletonBlock(width: 44, height: 12)
+                            }
+                            SkeletonBlock(width: 180, height: 10)
+                            Spacer(minLength: 0)
+                            SkeletonBlock(height: 6)
+                            HStack(spacing: 10) {
+                                SkeletonBlock(width: 60, height: 8)
+                                SkeletonBlock(width: 48, height: 8)
+                            }
+                        }
+                    }
+                }
+            }
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            SkeletonBlock(width: 190, height: 14)
+                            SkeletonBlock(width: 300, height: 10)
+                        }
+                        Spacer()
+                        SkeletonBlock(width: 210, height: 22)
+                    }
+                    SkeletonBlock(height: 240, radius: 8).opacity(0.7)
+                    HStack(spacing: 8) {
+                        ForEach(0..<3, id: \.self) { _ in SkeletonBlock(width: 150, height: 24, radius: 8) }
+                    }
+                }
+            }
+            HStack(spacing: 12) {
+                ForEach(0..<3, id: \.self) { _ in
+                    card(height: 92) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SkeletonBlock(width: 80, height: 9)
+                            SkeletonBlock(width: 160, height: 13)
+                            SkeletonBlock(width: 110, height: 18)
+                        }
+                    }
+                }
+            }
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        SkeletonBlock(width: 200, height: 14)
+                        SkeletonBlock(width: 60, height: 12)
+                        Spacer()
+                        SkeletonBlock(width: 220, height: 24, radius: 8)
+                    }
+                    ForEach(0..<6, id: \.self) { index in
+                        HStack(spacing: 12) {
+                            HStack(spacing: 9) {
+                                SkeletonBlock(width: 7, height: 7, radius: 4)
+                                SkeletonBlock(width: CGFloat(120 + (index * 37) % 90), height: 12)
+                                SkeletonBlock(width: 44, height: 14, radius: 7)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            SkeletonBlock(width: 80, height: 12)
+                            SkeletonBlock(width: 60, height: 12)
+                            SkeletonBlock(width: 56, height: 12)
+                            SkeletonBlock(width: 56, height: 12)
+                            SkeletonBlock(width: 36, height: 14, radius: 7)
+                        }
+                        .padding(.vertical, 9)
+                        if index < 5 { Rectangle().fill(Theme.divider).frame(height: 1) }
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading local session logs…").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+            }
+        }
+        .accessibilityLabel("Loading usage analysis")
+    }
+
+    private func card<Content: View>(height: CGFloat? = nil, @ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
+            .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+    }
+}
+
+/// A pulsing placeholder bar. One shared phase keeps every block in step.
+struct SkeletonBlock: View {
+    var width: CGFloat? = nil
+    var height: CGFloat = 12
+    var radius: CGFloat = 4
+    @State private var bright = false
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .fill(Color.white.opacity(bright ? 0.12 : 0.06))
+            .frame(width: width, height: height)
+            .frame(maxWidth: width == nil ? .infinity : nil)
+            .onAppear {
+                guard !RenderFlags.isRendering else { return }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { bright = true }
+            }
+    }
+}
 
 /// Effort level as a small tinted pill, using the same colors as the chart.
 struct EffortPill: View {

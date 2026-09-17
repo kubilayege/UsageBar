@@ -1,11 +1,11 @@
 import Foundation
 
-enum AnalysisCostResolution: String, CaseIterable, Identifiable {
+enum AnalysisCostResolution: String, CaseIterable, Identifiable, Sendable {
     case average, turns
     var id: String { rawValue }
 }
 
-struct AnalysisCostPoint: Identifiable, Equatable {
+struct AnalysisCostPoint: Identifiable, Equatable, Sendable {
     var id: String
     var timestamp: Date
     var start: Date
@@ -15,7 +15,7 @@ struct AnalysisCostPoint: Identifiable, Equatable {
     var segment: String
 }
 
-struct AnalysisCostPlot {
+struct AnalysisCostPlot: Sendable {
     var points: [AnalysisCostPoint]
     var omittedTurns: Int
     var isHourly: Bool
