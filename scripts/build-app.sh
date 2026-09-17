@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="UsageBar"
 BUNDLE_ID="com.kubilay.usagebar"
-VERSION="${VERSION:-1.3.1}"
+VERSION="${VERSION:-1.4.0}"
 OUT="build/${APP_NAME}.app"
 ICON="Sources/UsageBar/Resources/AppLogo.png"
 [[ -f "$ICON" ]] || { echo "missing app artwork: $ICON"; exit 1; }

@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 
 @MainActor
 final class UsageAnalysisState: ObservableObject {
@@ -37,11 +38,45 @@ enum AnalysisRowSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .turns: return "Most turns"
-        case .tokens: return "Fewest tokens / turn"
-        case .cost: return "Lowest $ / turn"
+        case .turns: return "Most used"
+        case .tokens: return "Leanest"
+        case .cost: return "Cheapest"
         }
     }
+    var help: String {
+        switch self {
+        case .turns: return "Most recorded turns first"
+        case .tokens: return "Fewest tokens per turn first"
+        case .cost: return "Lowest estimated cost per turn first"
+        }
+    }
+}
+
+/// Shared visual vocabulary for reasoning effort, used by the chart, legend and table.
+enum EffortStyle {
+    static let order = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    static func rank(_ effort: String?) -> Int { order.firstIndex(of: effort ?? "") ?? order.count }
+    static func color(_ effort: String?) -> Color {
+        switch effort {
+        case "none", "minimal": return Color(hex: 0xB6AEA8)
+        case "low": return Color(hex: 0x87BE82)
+        case "medium": return Color(hex: 0x73BCE8)
+        case "high": return Color(hex: 0xE1C46B)
+        case "xhigh": return Color(hex: 0xB29AEE)
+        case "max": return Color(hex: 0xEE997A)
+        case "ultra": return Color(hex: 0xE488B6)
+        default: return Theme.textSecondary
+        }
+    }
+    static func label(_ effort: String?) -> String { effort ?? "effort not recorded" }
+}
+
+/// Colors for the four token kinds a turn is billed on.
+enum TokenKindStyle {
+    static let input = Theme.accent
+    static let cached = Color(hex: 0x6E625B)
+    static let cacheWrite = Theme.caution
+    static let output = Color(hex: 0xF3ECE5)
 }
 
 struct UsageAnalysisView: View {
@@ -54,6 +89,7 @@ struct UsageAnalysisView: View {
     @State private var showRates = false
     @State private var plotResolution = AnalysisCostResolution.average
     @State private var sort = AnalysisRowSort.turns
+    @State private var hoveredRow: String?
 
     init(days: Int = 7, provider: ProviderID? = nil, model: String? = nil,
          resolution: AnalysisCostResolution = .average) {
@@ -78,8 +114,11 @@ struct UsageAnalysisView: View {
         var rows: [AnalysisRow] = []
         var priceSources: [String: PriceSource] = [:]
         var totalTokens = 0
+        var input = 0, cached = 0, cacheWrite = 0, output = 0
         var pricedTurnCount = 0
         var pricedCost = 0.0
+        var turnsByProvider: [ProviderID: Int] = [:]
+        var costByProvider: [ProviderID: Double] = [:]
         var plot = AnalysisCostPlot(points: [], omittedTurns: 0, isHourly: false)
         var unpricedModels: [AnalysisTurn] { models.filter { priceSources[$0.modelKey] == .missing } }
     }
@@ -105,7 +144,12 @@ struct UsageAnalysisView: View {
         }
         for turn in d.turns {
             d.totalTokens += turn.tokens
-            if let cost = d.rates[turn.modelKey]?.cost(turn) { d.pricedTurnCount += 1; d.pricedCost += cost }
+            d.input += turn.input; d.cached += turn.cached; d.cacheWrite += turn.cacheWrite; d.output += turn.output
+            d.turnsByProvider[turn.provider, default: 0] += 1
+            if let cost = d.rates[turn.modelKey]?.cost(turn) {
+                d.pricedTurnCount += 1; d.pricedCost += cost
+                d.costByProvider[turn.provider, default: 0] += cost
+            }
         }
         d.plot = AnalysisCostPlot.make(d.turns, since: start, until: end, enabled: enabled, rates: d.rates, resolution: plotResolution)
         return d
@@ -113,33 +157,32 @@ struct UsageAnalysisView: View {
 
     var body: some View {
         let d = derive()
-        return VStack(alignment: .leading, spacing: 16) {
-            header
-            toolbar(d)
-            if let result = state.result, result.unreadableFiles > 0 {
-                Label("\(result.unreadableFiles) log files could not be read. Results cover the accessible logs.", systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(Theme.caution)
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 0) {
+            header(d).padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 16)
+            controls(d).padding(.horizontal, 28).padding(.bottom, 18)
+            Rectangle().fill(Theme.divider).frame(height: 1)
+            MaybeScroll {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let result = state.result, result.unreadableFiles > 0 {
+                        notice("\(result.unreadableFiles) log files could not be read. Results cover the accessible logs.")
+                    }
                     if d.rows.isEmpty {
                         emptyState
                     } else {
-                        summaryTiles(d)
+                        overview(d)
                         UsageCostChart(plot: d.plot, start: start, end: end, resolution: $plotResolution,
-                                       onFixPrices: { withAnimation { showRates = true } })
-                        findings(d)
+                                       onFixPrices: { withAnimation(.snappy) { showRates = true } })
+                        highlights(d)
                         modelTable(d)
-                        subscriptionTable(d)
+                        subscriptionCard(d)
                         pricingCard(d)
+                        footnote
                     }
-                    Text("A turn is one recorded model response, including tool-use responses; streaming duplicates and repeated Codex counters are removed. This is an observational comparison across different tasks: it cannot infer task success, retries or cost per completed task. Claude effort appears only when recorded. Cursor keeps no supported local turn history.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 28)
             }
         }
-        .padding(24)
         .background(Theme.bg).foregroundStyle(Theme.textPrimary).preferredColorScheme(.dark)
         .onChange(of: selectedProvider) { _, _ in selectedModel = nil }
         .onChange(of: days) { _, _ in if let selectedModel, !derive().models.contains(where: { $0.modelKey == selectedModel }) { self.selectedModel = nil } }
@@ -151,34 +194,47 @@ struct UsageAnalysisView: View {
 
     // MARK: Header & controls
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Usage & effort").font(.system(size: 24, weight: .bold, design: .rounded))
-                Text("Cost and token use per assistant turn, from your local session logs").foregroundStyle(Theme.textSecondary)
+    private func header(_ d: Derived) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Usage & effort").font(.system(size: 26, weight: .bold, design: .rounded))
+                HStack(spacing: 8) {
+                    Text("\(Format.dateTime(start))  →  \(Format.dateTime(end))")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(Theme.textSecondary)
+                    if let result = state.result {
+                        Text("·").foregroundStyle(Theme.textMuted)
+                        Text("scanned \(Format.relative(result.scannedAt))").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                    }
+                }
             }
             Spacer()
-            if state.isScanning { ProgressView().controlSize(.small).padding(.trailing, 6) }
             Button { Task { await state.analyze() } } label: {
-                Label(state.isScanning ? "Analyzing…" : "Rescan logs", systemImage: "arrow.clockwise")
+                HStack(spacing: 7) {
+                    if state.isScanning { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold)) }
+                    Text(state.isScanning ? "Reading logs…" : "Rescan logs").font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(ChipButtonStyle()).disabled(state.isScanning)
+            .help("Read Claude Code, Codex and OpenCode session logs again")
         }
     }
 
-    private func toolbar(_ d: Derived) -> some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Picker("Range", selection: $days) {
-                    Text("24h").tag(1)
-                    Text("7d").tag(7)
-                    Text("30d").tag(30)
-                    Text("90d").tag(90)
-                    if !Self.presets.contains(days) { Text("\(days)d").tag(days) }
+    private func controls(_ d: Derived) -> some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 2) {
+                ForEach(Self.presets, id: \.self) { preset in
+                    segment(preset == 1 ? "24h" : "\(preset)d", selected: days == preset) { days = preset }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: Self.presets.contains(days) ? 220 : 270)
-                Stepper("Days", value: $days, in: 1...120).labelsHidden().help("Custom range: 1–120 days")
+                if !Self.presets.contains(days) { segment("\(days)d", selected: true) {} }
+                Stepper("Days", value: $days, in: 1...120).labelsHidden().controlSize(.small).padding(.leading, 4)
+                    .help("Custom range: 1–120 days")
             }
+            .padding(3)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+
             Picker("Provider", selection: $selectedProvider) {
                 Text("All providers").tag(nil as ProviderID?)
                 ForEach(settings.orderedEnabledProviders) { Text($0.displayName).tag(Optional($0)) }
@@ -188,70 +244,179 @@ struct UsageAnalysisView: View {
                 ForEach(d.models) { Text("\($0.provider.displayName) · \($0.model)").tag(Optional($0.modelKey)) }
             }.labelsHidden().frame(maxWidth: 320)
             Spacer()
-            Text("\(Format.dateTime(start)) – \(Format.dateTime(end))")
-                .font(.system(size: 11)).foregroundStyle(Theme.textMuted).monospacedDigit()
         }
+    }
+
+    private func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: selected ? .semibold : .medium, design: .monospaced))
+                .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? Theme.chipSelected : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(selected ? Theme.chipSelectedStroke : .clear, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func notice(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 11))
+            Text(text).font(.system(size: 12))
+        }
+        .foregroundStyle(Theme.caution)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Theme.caution.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: state.isScanning ? "doc.text.magnifyingglass" : "tray")
-                .font(.system(size: 28)).foregroundStyle(Theme.textMuted)
-            Text(state.isScanning ? "Reading local session usage…" : "No recorded assistant turns in this range")
-                .font(.headline)
+                .font(.system(size: 30, weight: .light)).foregroundStyle(Theme.textMuted)
+            Text(state.isScanning ? "Reading local session logs…" : "No recorded turns in this range")
+                .font(.system(size: 15, weight: .semibold))
             if !state.isScanning {
-                Text("Try a longer range, pick another provider, or enable a provider in Settings.")
+                Text("Widen the range, choose another provider, or enable a provider in Settings.")
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                HStack(spacing: 8) {
+                    Button("Last 30 days") { days = 30 }.buttonStyle(ChipButtonStyle())
+                    Button("Last 90 days") { days = 90 }.buttonStyle(ChipButtonStyle())
+                }
+                .font(.system(size: 12, weight: .medium)).padding(.top, 4)
             }
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 48)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity).padding(.vertical, 64)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
     }
 
-    // MARK: Summary
+    // MARK: Overview
 
-    private func summaryTiles(_ d: Derived) -> some View {
-        let priced = d.pricedTurnCount, total = d.pricedCost, count = d.turns.count
+    private func overview(_ d: Derived) -> some View {
+        let count = d.turns.count
+        let priced = d.pricedTurnCount
         let coverage = count == 0 ? 0 : Double(priced) / Double(count)
         let complete = priced == count
-        return HStack(spacing: 12) {
-            StatTile(value: "\(count)", label: "turns · \(days == 1 ? "24 hours" : "\(days) days")")
-            StatTile(value: Format.tokens(d.totalTokens), label: "tokens · \(Format.tokens(d.totalTokens / max(1, count))) per turn")
-            StatTile(value: priced == 0 ? "—" : (complete ? "" : "≥ ") + money(total, 2),
-                     label: complete ? "est. API cost at list prices" : "est. API cost · \(Int(coverage * 100))% of turns priced",
-                     tint: complete || priced == 0 ? Theme.textPrimary : Theme.caution)
-            StatTile(value: priced == 0 ? "—" : money(total / Double(priced), 4),
-                     label: complete ? "est. API $ per turn" : "est. $ per priced turn")
+        let providers = settings.orderedEnabledProviders.filter { (d.turnsByProvider[$0] ?? 0) > 0 }
+        let perDay = Double(count) / Double(max(1, days))
+        return HStack(alignment: .top, spacing: 12) {
+            metric(value: count.formatted(), unit: "turns",
+                   detail: days == 1 ? "in the last 24 hours" : "\(Self.compact(perDay)) per day over \(days) days",
+                   segments: providers.map { (Double(d.turnsByProvider[$0] ?? 0), $0.color, $0.displayName) })
+            metric(value: Format.tokens(d.totalTokens), unit: "tokens",
+                   detail: "\(Format.tokens(d.totalTokens / max(1, count))) per turn · \(cacheShare(d)) of input served from cache",
+                   segments: [(Double(d.input), TokenKindStyle.input, "uncached in"),
+                              (Double(d.cached), TokenKindStyle.cached, "cached"),
+                              (Double(d.cacheWrite), TokenKindStyle.cacheWrite, "cache write"),
+                              (Double(d.output), TokenKindStyle.output, "output")])
+            metric(value: priced == 0 ? "—" : (complete ? "" : "≥ ") + money(d.pricedCost, 2), unit: "est. API cost",
+                   detail: priced == 0 ? "No priced turns yet"
+                        : complete ? "\(money(d.pricedCost / Double(priced), 4)) per turn at list prices"
+                        : "\(money(d.pricedCost / Double(priced), 4)) per priced turn · \(Int(coverage * 100))% of turns priced",
+                   tint: complete || priced == 0 ? Theme.textPrimary : Theme.caution,
+                   segments: providers.compactMap { p in (d.costByProvider[p] ?? 0) > 0 ? (d.costByProvider[p]!, p.color, p.displayName) : nil })
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func cacheShare(_ d: Derived) -> String {
+        let input = d.input + d.cached + d.cacheWrite
+        return input > 0 ? "\(Int((100 * Double(d.cached) / Double(input)).rounded()))%" : "—"
+    }
+
+    private func metric(value: String, unit: String, detail: String, tint: Color = Theme.textPrimary,
+                        segments: [(Double, Color, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if value.hasPrefix("≥ ") {
+                        Text("≥").font(.system(size: 16, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.textMuted)
+                            .help("Lower bound: some turns have no price")
+                    }
+                    Text(value.hasPrefix("≥ ") ? String(value.dropFirst(2)) : value)
+                        .font(.system(size: 26, weight: .bold, design: .monospaced)).foregroundStyle(tint)
+                    Text(unit).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                }
+                Text(detail).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            CompositionBar(segments: segments)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+    }
+
+    // MARK: Highlights
+
+    private func highlights(_ d: Derived) -> some View {
+        let rows = d.rows, unpriced = d.unpricedModels
+        let total = rows.reduce(0) { $0 + $1.turns }
+        let mostUsed = rows.max { $0.turns < $1.turns }
+        let leanest = rows.filter { $0.turns >= 5 }.min { $0.tokensPerTurn < $1.tokensPerTurn }
+        let cheapest = UsageAnalysis.cheapest(rows)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                if let mostUsed {
+                    highlight("Most used", row: mostUsed,
+                              value: total > 0 ? "\(Int((Double(mostUsed.turns) / Double(total) * 100).rounded()))%" : "—", caption: "of \(total.formatted()) turns")
+                }
+                if let leanest {
+                    highlight("Leanest per turn", row: leanest, value: Format.tokens(Int(leanest.tokensPerTurn)), caption: "tokens per turn")
+                }
+                if let cheapest {
+                    highlight("Cheapest per turn", row: cheapest, value: money(cheapest.costPerTurn, 4), caption: "estimated at list prices")
+                } else {
+                    blockedHighlight(unpriced)
+                }
+            }
+            Text("Cheaper turns are not cheaper tasks. A higher effort level can finish the same work in fewer turns.")
+                .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
         }
     }
 
-    private func findings(_ d: Derived) -> some View {
-        let rows = d.rows, unpricedModels = d.unpricedModels
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("What the logs show").font(.headline)
-            if let best = UsageAnalysis.cheapest(rows) {
-                finding("dollarsign.circle", "Lowest estimated API cost per turn: **\(best.model) · \(best.effort ?? "effort not recorded")** at \(money(best.costPerTurn, 4)).")
-            } else if !unpricedModels.isEmpty {
-                finding("exclamationmark.circle", "A cost comparison needs a price for every model. \(unpricedModels.count == 1 ? "1 model has" : "\(unpricedModels.count) models have") no price: \(unpricedModels.map(\.model).joined(separator: ", ")).")
+    private func highlight(_ title: String, row: AnalysisRow, value: String, caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            eyebrow(title)
+            HStack(spacing: 6) {
+                ProviderDot(id: row.provider, size: 7)
+                Text(row.model).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                EffortPill(effort: row.effort)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(value).font(.system(size: 18, weight: .bold, design: .monospaced))
+                Text(caption).font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+    }
+
+    private func blockedHighlight(_ unpriced: [AnalysisTurn]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            eyebrow("Cheapest per turn")
+            if unpriced.isEmpty {
+                Text("Needs at least 5 turns in every compared group.").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                Text("Widen the range to compare costs.").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
             } else {
-                finding("exclamationmark.circle", "A cost comparison needs at least 5 turns in every compared group.")
+                Text(unpriced.count == 1 ? "1 model has no price: \(unpriced[0].model)."
+                     : "\(unpriced.count) models have no price: \(unpriced.map(\.model).joined(separator: ", ")).")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary).lineLimit(2)
+                Button("Add prices") { withAnimation(.snappy) { showRates = true } }
+                    .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
             }
-            if rows.count >= 2, let lowest = rows.filter({ $0.turns >= 5 }).min(by: { $0.tokensPerTurn < $1.tokensPerTurn }) {
-                finding("text.word.spacing", "Lowest token use per turn: **\(lowest.model) · \(lowest.effort ?? "effort not recorded")** at \(Format.tokens(Int(lowest.tokensPerTurn))) tokens.")
-            }
-            Text("Cheaper turns are not the same as cheaper tasks: a higher effort level may finish the same work in fewer turns.")
-                .foregroundStyle(Theme.textSecondary)
         }
-        .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(14).frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(Theme.cardStroke))
     }
 
-    private func finding(_ icon: String, _ markdown: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon).foregroundStyle(Theme.accent).frame(width: 16)
-            Text(try! AttributedString(markdown: markdown))
-        }
+    private func eyebrow(_ text: String) -> some View {
+        Text(text.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(Theme.textMuted)
     }
 
     // MARK: Table
@@ -259,116 +424,168 @@ struct UsageAnalysisView: View {
     private func modelTable(_ d: Derived) -> some View {
         let rows = d.rows
         let total = rows.reduce(0) { $0 + $1.turns }
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Model & reasoning effort").font(.headline)
+        let maxTurns = rows.map(\.turns).max() ?? 1
+        let maxCost = rows.compactMap(\.costPerTurn).max() ?? 0
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Model & reasoning effort").font(.system(size: 15, weight: .semibold))
+                Text("\(rows.count) groups").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
                 Spacer()
-                Picker("Sort", selection: $sort) { ForEach(AnalysisRowSort.allCases) { Text($0.label).tag($0) } }
-                    .labelsHidden().frame(width: 190)
-            }
-            Grid(alignment: .trailing, horizontalSpacing: 18, verticalSpacing: 0) {
-                GridRow {
-                    Text("Model / effort").gridColumnAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Turns")
-                    Text("Tokens / turn")
-                    Text("Est. $ / turn")
-                    Text("Est. total")
-                    Text("Pricing").gridColumnAlignment(.leading)
-                }
-                .font(.system(size: 11)).foregroundStyle(Theme.textMuted).padding(.bottom, 8)
-                Divider().gridCellUnsizedAxes(.horizontal)
-                ForEach(rows) { row in
-                    GridRow {
-                        HStack(spacing: 8) {
-                            ProviderDot(id: row.provider, size: 7)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(row.model).fontWeight(.medium).lineLimit(1)
-                                Text("\(row.provider.displayName) · \(row.effort ?? "effort not recorded")")
-                                    .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("\(row.turns)").foregroundStyle(row.turns < 5 ? Theme.caution : Theme.textPrimary)
-                            Text(total > 0 ? "\(Int((Double(row.turns) / Double(total) * 100).rounded()))%" : "")
-                                .font(.system(size: 10)).foregroundStyle(Theme.textMuted)
-                        }
-                        Text(Format.tokens(Int(row.tokensPerTurn)))
-                        Text(money(row.costPerTurn, 4)).foregroundStyle(row.costPerTurn == nil ? Theme.textMuted : Theme.textPrimary)
-                        Text(money(row.cost, 2)).foregroundStyle(row.cost == nil ? Theme.textMuted : Theme.textPrimary)
-                        priceBadge(d.priceSources[row.provider.rawValue + "/" + row.model] ?? .missing).gridColumnAlignment(.leading)
+                HStack(spacing: 2) {
+                    ForEach(AnalysisRowSort.allCases) { option in
+                        segment(option.label, selected: sort == option) { withAnimation(.snappy) { sort = option } }.help(option.help)
                     }
-                    .padding(.vertical, 8)
-                    Divider().gridCellUnsizedAxes(.horizontal).opacity(0.5)
+                }
+                .padding(3)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
+            }
+            Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 0) {
+                GridRow {
+                    Text("Model · effort").gridColumnAlignment(.leading).frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                    Text("Turns").gridColumnAlignment(.leading).frame(width: 96, alignment: .leading)
+                    Text("Tokens / turn").frame(width: 84, alignment: .trailing)
+                    Text("Est. $ / turn").frame(width: 92, alignment: .trailing)
+                    Text("Est. total").frame(width: 72, alignment: .trailing)
+                    Text("Price").gridColumnAlignment(.leading).frame(width: 56, alignment: .leading)
+                }
+                .font(.system(size: 10, weight: .semibold)).tracking(0.4).foregroundStyle(Theme.textMuted)
+                .padding(.bottom, 8).padding(.horizontal, 10)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    let hovered = hoveredRow == row.id
+                    let lowSample = row.turns < 5
+                    GridRow {
+                        HStack(spacing: 9) {
+                            ProviderDot(id: row.provider, size: 7)
+                            Text(row.model).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                            EffortPill(effort: row.effort).fixedSize()
+                            if lowSample {
+                                Image(systemName: "exclamationmark.circle").font(.system(size: 10)).foregroundStyle(Theme.caution)
+                                    .help("Fewer than 5 turns: too few to compare")
+                            }
+                        }.frame(minWidth: 200, maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(row.turns.formatted()).foregroundStyle(lowSample ? Theme.caution : Theme.textPrimary)
+                                Text(total > 0 ? "\(Int((Double(row.turns) / Double(total) * 100).rounded()))%" : "")
+                                    .font(.system(size: 10)).foregroundStyle(Theme.textMuted)
+                            }
+                            MiniBar(fraction: Double(row.turns) / Double(max(1, maxTurns)), color: row.provider.color, width: 80)
+                        }
+                        .frame(width: 96, alignment: .leading)
+                        Text(Format.tokens(Int(row.tokensPerTurn))).frame(width: 84, alignment: .trailing)
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text(money(row.costPerTurn, 4)).foregroundStyle(row.costPerTurn == nil ? Theme.textMuted : Theme.textPrimary)
+                            MiniBar(fraction: maxCost > 0 ? (row.costPerTurn ?? 0) / maxCost : 0, color: EffortStyle.color(row.effort), width: 56)
+                        }
+                        .frame(width: 92, alignment: .trailing)
+                        Text(money(row.cost, 2)).foregroundStyle(row.cost == nil ? Theme.textMuted : Theme.textSecondary).frame(width: 72, alignment: .trailing)
+                        priceBadge(d.priceSources[row.provider.rawValue + "/" + row.model] ?? .missing)
+                            .gridColumnAlignment(.leading).frame(width: 56, alignment: .leading)
+                    }
+                    .padding(.vertical, 9).padding(.horizontal, 10)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hovered ? Color.white.opacity(0.04) : .clear))
+                    .contentShape(Rectangle())
+                    .onHover { inside in hoveredRow = inside ? row.id : (hoveredRow == row.id ? nil : hoveredRow) }
+                    if index < rows.count - 1 {
+                        Rectangle().fill(Theme.divider).frame(height: 1).gridCellUnsizedAxes(.horizontal).padding(.horizontal, 10)
+                    }
                 }
             }
-            .font(.system(size: 12)).monospacedDigit()
-            Text("Yellow turn counts have fewer than 5 observations. Estimates apply one rate per model across the whole range; they are not your subscription bill.")
-                .font(.caption).foregroundStyle(Theme.textMuted)
+            .padding(.horizontal, -10)
+            .font(.system(size: 12, weight: .medium, design: .monospaced)).monospacedDigit()
         }
-        .padding(16).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12))
+        .padding(18).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
     }
 
     private func priceBadge(_ source: PriceSource) -> some View {
         Group {
             switch source {
             case .listed(let name):
-                Badge(text: "LiteLLM", color: Theme.ok).help("List price from LiteLLM entry “\(name)”")
+                Badge(text: "List", color: Theme.ok).help("LiteLLM list price for “\(name)”")
             case .custom:
                 Badge(text: "Custom", color: Theme.accent).help("Uses one or more rates you entered")
             case .missing:
-                Button { withAnimation { showRates = true } } label: { Badge(text: "Add price", color: Theme.caution) }
+                Button { withAnimation(.snappy) { showRates = true } } label: { Badge(text: "Add", color: Theme.caution) }
                     .buttonStyle(.plain).help("No list price matched this model. Enter rates in Pricing.")
             }
         }
     }
 
-    private func subscriptionTable(_ d: Derived) -> some View {
+    // MARK: Subscription
+
+    private func subscriptionCard(_ d: Derived) -> some View {
         let counts = Dictionary(grouping: d.providerTurns, by: \.provider).mapValues(\.count)
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("Subscription value").font(.headline)
-            ForEach(settings.orderedEnabledProviders.filter { enabled.contains($0) }) { provider in
-                let count = counts[provider] ?? 0
-                let cost = UsageAnalysis.subscriptionCostPerTurn(monthly: state.monthlyCosts[provider.rawValue], days: Double(days), turns: count)
-                HStack {
-                    ProviderDot(id: provider, size: 8)
-                    Text(provider.displayName).frame(width: 100, alignment: .leading)
-                    Text("\(count) recorded turns").foregroundStyle(Theme.textSecondary)
-                    Spacer()
-                    if let cost {
-                        Text("\(money(cost, 4)) / turn").monospacedDigit()
-                    } else if count == 0 {
-                        Text("No recorded turns").foregroundStyle(Theme.textMuted)
-                    } else {
-                        Button("Add monthly price") { withAnimation { showRates = true } }
-                            .buttonStyle(.plain).foregroundStyle(Theme.accent)
-                    }
-                }.font(.system(size: 12))
+        let providers = settings.orderedEnabledProviders.filter { enabled.contains($0) }
+        return VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("What each plan costs per turn").font(.system(size: 15, weight: .semibold))
+                Text("Your monthly price, prorated to the selected \(days == 1 ? "day" : "\(days) days") and divided by the turns recorded.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
             }
-            Text("Monthly price × selected days ÷ 30 ÷ recorded turns, across all models. This spreads a fixed bill over observed use; it is not a marginal token price, and incomplete local history inflates it.")
-                .font(.caption).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 0) {
+                ForEach(Array(providers.enumerated()), id: \.element) { index, provider in
+                    let count = counts[provider] ?? 0
+                    let cost = UsageAnalysis.subscriptionCostPerTurn(monthly: state.monthlyCosts[provider.rawValue], days: Double(days), turns: count)
+                    HStack(spacing: 12) {
+                        ProviderDot(id: provider, size: 8)
+                        Text(provider.displayName).font(.system(size: 13, weight: .medium)).frame(width: 96, alignment: .leading)
+                        Text(count == 0 ? "no recorded turns" : "\(count.formatted()) turns").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Text("$").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                            OptionalCostField(value: monthlyBinding(provider), placeholder: "—")
+                                .textFieldStyle(.roundedBorder).frame(width: 64).controlSize(.small)
+                            Text("/ month").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                        }
+                        Group {
+                            if let cost {
+                                Text(money(cost, 4)).foregroundStyle(Theme.textPrimary)
+                            } else {
+                                Text("—").foregroundStyle(Theme.textMuted)
+                            }
+                        }
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced)).frame(width: 84, alignment: .trailing)
+                        Text("/ turn").font(.system(size: 11)).foregroundStyle(Theme.textMuted).frame(width: 38, alignment: .leading)
+                    }
+                    .padding(.vertical, 8)
+                    if index < providers.count - 1 { Rectangle().fill(Theme.divider).frame(height: 1) }
+                }
+            }
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12))
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+    }
+
+    private func monthlyBinding(_ provider: ProviderID) -> Binding<Double?> {
+        Binding(get: { state.monthlyCosts[provider.rawValue] }, set: { state.monthlyCosts[provider.rawValue] = $0 })
     }
 
     // MARK: Pricing
 
     private func pricingCard(_ d: Derived) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button { withAnimation { showRates.toggle() } } label: {
-                HStack(spacing: 10) {
+            Button { withAnimation(.snappy) { showRates.toggle() } } label: {
+                HStack(spacing: 12) {
                     Image(systemName: "chevron.right").rotationEffect(.degrees(showRates ? 90 : 0))
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary)
-                    Text("Pricing").font(.headline)
-                    Text(pricingSummary(d)).font(.system(size: 12)).foregroundStyle(d.unpricedModels.isEmpty ? Theme.textSecondary : Theme.caution)
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary).frame(width: 12)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Token prices").font(.system(size: 15, weight: .semibold))
+                        Text(pricingSummary(d)).font(.system(size: 11)).foregroundStyle(d.unpricedModels.isEmpty ? Theme.textMuted : Theme.caution)
+                    }
                     Spacer()
+                    if !d.unpricedModels.isEmpty && !showRates {
+                        Badge(text: "\(d.unpricedModels.count) missing", color: Theme.caution)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if showRates { costEditor(d).padding(.top, 14) }
+            if showRates { costEditor(d).padding(.top, 16) }
         }
-        .padding(16).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12))
+        .padding(18).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
     }
 
     private func pricingSummary(_ d: Derived) -> String {
@@ -380,17 +597,21 @@ struct UsageAnalysisView: View {
 
     private func costEditor(_ d: Derived) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("USD per 1 million tokens. Grey values are LiteLLM list prices; type over one to override it, or leave blank to keep the list price. Models without a list price stay unpriced until you enter rates; zero means free.")
-                        .font(.caption).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                    Text("USD per million tokens. Grey values are LiteLLM list prices. Type over one to override it, or leave it blank to keep the list price. Zero means free.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
                     if let error = prices.lastError {
-                        Text("Refresh failed: \(error)").font(.caption).foregroundStyle(Theme.caution)
+                        Text("Refresh failed: \(error)").font(.system(size: 11)).foregroundStyle(Theme.caution)
                     }
                 }
                 Spacer()
                 Button { Task { await prices.refresh() } } label: {
-                    Label(prices.isRefreshing ? "Refreshing…" : "Refresh list prices", systemImage: "arrow.down.circle")
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle").font(.system(size: 11, weight: .semibold))
+                        Text(prices.isRefreshing ? "Refreshing…" : "Refresh list prices").font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.textSecondary)
                 }
                 .buttonStyle(ChipButtonStyle()).disabled(prices.isRefreshing)
                 .help("Downloads the current price list from LiteLLM on GitHub (\(prices.catalog.models.count) models)")
@@ -400,7 +621,7 @@ struct UsageAnalysisView: View {
                     Text("Model").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Input"); Text("Cached"); Text("Cache write"); Text("Output"); Text("Source"); Text("")
                 }
-                .font(.caption).foregroundStyle(Theme.textMuted)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.4).foregroundStyle(Theme.textMuted)
                 ForEach(d.models) { model in
                     let listed = prices.catalog.match(model.model)
                     let override = state.rates[model.modelKey]
@@ -408,7 +629,7 @@ struct UsageAnalysisView: View {
                     GridRow {
                         HStack(spacing: 6) {
                             ProviderDot(id: model.provider, size: 6)
-                            Text(model.model).font(.system(size: 11)).lineLimit(1)
+                            Text(model.model).font(.system(size: 11, weight: .medium)).lineLimit(1)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         rateField(model.modelKey, \.input, listed: listed?.price.rates.input)
                         rateField(model.modelKey, \.cached, listed: listed?.price.rates.cached)
@@ -423,20 +644,8 @@ struct UsageAnalysisView: View {
                         }
                         .font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1).frame(width: 190, alignment: .leading)
                         Button("Reset") { state.rates[model.modelKey] = nil }
-                            .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.accent)
+                            .buttonStyle(.plain).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.accent)
                             .opacity(hasOverride ? 1 : 0).disabled(!hasOverride).help("Discard your overrides for this model")
-                    }
-                }
-            }
-            Divider()
-            Text("Monthly subscription prices (USD) · used for Subscription value").font(.subheadline)
-            HStack(spacing: 18) {
-                ForEach(settings.orderedEnabledProviders) { provider in
-                    HStack(spacing: 6) {
-                        ProviderDot(id: provider, size: 6)
-                        Text(provider.displayName).font(.system(size: 12))
-                        OptionalCostField(value: Binding(get: { state.monthlyCosts[provider.rawValue] }, set: { state.monthlyCosts[provider.rawValue] = $0 }), placeholder: "—")
-                            .textFieldStyle(.roundedBorder).frame(width: 74)
                     }
                 }
             }
@@ -449,9 +658,23 @@ struct UsageAnalysisView: View {
             rates[keyPath: path] = value
             state.rates[key] = rates
         }), placeholder: listed.map { Self.trim($0) } ?? "Unknown")
-        .textFieldStyle(.roundedBorder).frame(width: 78)
+        .textFieldStyle(.roundedBorder).controlSize(.small).frame(width: 78)
     }
 
+    // MARK: Footnote
+
+    private var footnote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            eyebrow("About these numbers")
+            Group {
+                Text("A turn is one recorded model response, including tool-use responses. Streaming duplicates and repeated Codex counters are removed.")
+                Text("Estimates apply one list rate per model across the whole range. They are not historical prices or your bill, and unknown prices are never shown as $0.")
+                Text("This is an observational comparison across different tasks. It cannot infer task success, retries or cost per completed task. Claude effort appears only when recorded. Cursor keeps no supported local turn history.")
+            }
+            .font(.system(size: 11)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+    }
 
     private func money(_ value: Double?, _ digits: Int) -> String { value.map { String(format: "$%.\(digits)f", $0) } ?? "—" }
     static func trim(_ value: Double) -> String {
@@ -461,10 +684,80 @@ struct UsageAnalysisView: View {
         if t.hasSuffix(".") { t = t.dropLast() }
         return String(t)
     }
+    private static func compact(_ value: Double) -> String {
+        value >= 100 ? String(format: "%.0f", value) : value >= 10 ? String(format: "%.1f", value) : String(format: "%.2f", value)
+    }
+}
+
+// MARK: - Building blocks
+
+/// Effort level as a small tinted pill, using the same colors as the chart.
+struct EffortPill: View {
+    var effort: String?
+    var body: some View {
+        let color = EffortStyle.color(effort)
+        Text(EffortStyle.label(effort))
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(effort == nil ? Theme.textMuted : color)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(effort == nil ? 0.08 : 0.16)))
+    }
+}
+
+/// A stacked proportion bar with a compact legend underneath.
+struct CompositionBar: View {
+    var segments: [(Double, Color, String)]
+    private var total: Double { segments.reduce(0) { $0 + $1.0 } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            GeometryReader { geo in
+                HStack(spacing: 2) {
+                    if total <= 0 {
+                        Capsule().fill(Theme.track)
+                    } else {
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            let share = segment.0 / total
+                            if share > 0 {
+                                RoundedRectangle(cornerRadius: 2, style: .continuous).fill(segment.1)
+                                    .frame(width: max(2, (geo.size.width - CGFloat(segments.count - 1) * 2) * share))
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(height: 6)
+            FlowLayout(spacing: 10) {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    if segment.0 > 0 {
+                        HStack(spacing: 4) {
+                            Circle().fill(segment.1).frame(width: 6, height: 6)
+                            Text(segment.2).font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                            Text(total > 0 ? "\(Int((segment.0 / total * 100).rounded()))%" : "")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Theme.textMuted)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Thin proportional bar used inside table cells.
+struct MiniBar: View {
+    var fraction: Double
+    var color: Color
+    var width: CGFloat = 96
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule().fill(Theme.track.opacity(0.6))
+            Capsule().fill(color.opacity(0.9)).frame(width: max(fraction > 0 ? 3 : 0, width * CGFloat(min(1, max(0, fraction)))))
+        }
+        .frame(width: width, height: 3)
+    }
 }
 
 /// Preserve the text while editing decimal rates; commit when focus leaves or Return is pressed.
-private struct OptionalCostField: View {
+struct OptionalCostField: View {
     @Binding var value: Double?
     var placeholder = "Unknown"
     @State private var text = ""
@@ -478,7 +771,7 @@ private struct OptionalCostField: View {
             .onSubmit(commit)
             .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
             .foregroundStyle(invalid ? Theme.caution : Theme.textPrimary)
-            .help(invalid ? "Enter a nonnegative USD amount, or leave blank." : "USD per 1M tokens; blank keeps the list price")
+            .help(invalid ? "Enter a nonnegative USD amount, or leave blank." : "USD amount; blank keeps the default")
     }
     private func commit() {
         let raw = text.trimmingCharacters(in: .whitespaces)

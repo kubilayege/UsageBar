@@ -112,10 +112,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             .sink { [weak self] _ in self?.openDashboard() }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .usageBarOpenAnalysis)
-            .sink { [weak self] _ in
-                self?.popover.performClose(nil)
-                AnalysisWindowController.shared.show()
-            }
+            .sink { [weak self] _ in self?.openAnalysis() }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .usageBarOpenSettings)
             .sink { [weak self] _ in self?.openSettings() }
@@ -218,6 +215,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.performClose(nil)
         DashboardWindowController.shared.show()
     }
+    @objc private func openAnalysis() {
+        popover.performClose(nil)
+        DashboardWindowController.shared.show(tab: .analysis)
+    }
     @objc private func openSettings() {
         popover.performClose(nil)
         DashboardWindowController.shared.show(tab: .settings)
@@ -260,29 +261,6 @@ enum MenuBarIcon {
     }
 }
 
-@MainActor
-final class AnalysisWindowController {
-    static let shared = AnalysisWindowController()
-    private var window: NSWindow?
-    func show() {
-        if window == nil {
-            let host = NSHostingController(rootView: UsageAnalysisView())
-            let w = NSWindow(contentViewController: host)
-            w.title = "UsageBar · Usage & effort"
-            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            w.appearance = NSAppearance(named: .darkAqua)
-            w.isReleasedWhenClosed = false
-            w.setContentSize(NSSize(width: 940, height: 760))
-            w.minSize = NSSize(width: 820, height: 500)
-            w.center()
-            window = w
-        }
-        window?.deminiaturize(nil)
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
 // MARK: - Dashboard window
 
 @MainActor
@@ -303,8 +281,8 @@ final class DashboardWindowController {
             w.appearance = NSAppearance(named: .darkAqua)
             w.backgroundColor = NSColor(Theme.bg)
             w.isReleasedWhenClosed = false
-            w.setContentSize(NSSize(width: 980, height: 660))
-            w.minSize = NSSize(width: 860, height: 560)
+            w.setContentSize(NSSize(width: 1060, height: 720))
+            w.minSize = NSSize(width: 960, height: 600)
             w.center()
             w.setFrameAutosaveName("UsageBarDashboard")
             window = w
@@ -372,6 +350,11 @@ enum PreviewRenderer {
         if let i = args.firstIndex(of: "--render-compact"), i + 1 < args.count {
             store.settings.compactPopover = true
             render(PopoverView(viewportHeight: 560).environmentObject(store).environmentObject(store.settings), to: args[i + 1])
+        }
+        if let i = args.firstIndex(of: "--render-analysis-tab"), i + 1 < args.count {
+            store.dashboardTab = .analysis
+            UsageAnalysisState.shared.loadLocalPreview(at: Date())
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 760), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-settings"), i + 1 < args.count {
             store.dashboardTab = .settings

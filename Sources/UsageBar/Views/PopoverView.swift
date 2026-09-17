@@ -238,12 +238,6 @@ struct PopoverView: View {
             .buttonStyle(ChipButtonStyle())
             .help(settings.compactPopover ? "Show details" : "Compact view")
 
-            Button { NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil) } label: {
-                Image(systemName: "chart.bar.xaxis").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
-            }
-            .buttonStyle(ChipButtonStyle())
-            .help("Analyze usage, reasoning effort and cost per turn")
-
             Spacer(minLength: 0)
 
             if let version = updates.availableVersion {
@@ -266,33 +260,23 @@ struct PopoverView: View {
             Button {
                 NotificationCenter.default.post(name: .usageBarOpenDashboard, object: nil)
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "square.grid.2x2").font(.system(size: 13))
-                    Text("Dashboard").font(.system(size: 13, weight: .semibold))
-                    Spacer(minLength: 0)
-                    Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
+                HStack(spacing: 6) {
+                    Image(systemName: "square.grid.2x2").font(.system(size: 12))
+                    Text("Dashboard").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "arrow.up.forward").font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(Theme.textPrimary)
-                .frame(maxWidth: .infinity, minHeight: 22)
+                .fixedSize()
             }
             .buttonStyle(ChipButtonStyle(selected: true))
-            .help("Open the dashboard overview")
+            .help("Open the dashboard: overview, history, analysis and settings")
 
-            Button {
-                NotificationCenter.default.post(name: .usageBarOpenSettings, object: nil)
-            } label: {
-                Image(systemName: "gearshape").font(.system(size: 13))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 16, height: 22)
-            }
-            .buttonStyle(ChipButtonStyle())
-            .accessibilityLabel("Settings")
-            .help("Open Settings in the dashboard")
+            Spacer(minLength: 0)
 
             Button { NSApp.terminate(nil) } label: {
-                Image(systemName: "power").font(.system(size: 13))
+                Image(systemName: "power").font(.system(size: 12))
                     .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 16, height: 22)
+                    .frame(width: 14, height: 16)
             }
             .buttonStyle(ChipButtonStyle())
             .accessibilityLabel("Quit UsageBar")

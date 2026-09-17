@@ -2,12 +2,13 @@ import SwiftUI
 import Charts
 
 enum DashboardTab: String, CaseIterable, Identifiable {
-    case overview = "Overview", history = "History", settings = "Settings"
+    case overview = "Overview", history = "History", analysis = "Analysis", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .overview: return "square.grid.2x2"
         case .history: return "chart.xyaxis.line"
+        case .analysis: return "chart.bar.xaxis"
         case .settings: return "gearshape"
         }
     }
@@ -44,6 +45,7 @@ struct DashboardView: View {
                 switch store.dashboardTab {
                 case .overview: OverviewTab()
                 case .history: HistoryTab()
+                case .analysis: UsageAnalysisView()
                 case .settings: SettingsView()
                 }
             }
@@ -51,7 +53,7 @@ struct DashboardView: View {
         }
         .background(Theme.bg)
         .preferredColorScheme(.dark)
-        .frame(minWidth: 860, minHeight: 560)
+        .frame(minWidth: 960, minHeight: 600)
     }
 
     private var sidebar: some View {
