@@ -31,7 +31,6 @@ final class AppSettings: ObservableObject {
     @Published var opencodeDailyTokenBudget: Int { didSet { d.set(opencodeDailyTokenBudget, forKey: "opencodeDailyTokenBudget") } }
     @Published var showLiveSessions: Bool { didSet { d.set(showLiveSessions, forKey: "showLiveSessions") } }
     @Published var launchAtLogin: Bool { didSet { d.set(launchAtLogin, forKey: "launchAtLogin"); applyLaunchAtLogin() } }
-    @Published var checkForUpdates: Bool { didSet { d.set(checkForUpdates, forKey: "checkForUpdates") } }
 
     init(defaults: UserDefaults = .standard) {
         d = defaults
@@ -47,7 +46,6 @@ final class AppSettings: ObservableObject {
         opencodeDailyTokenBudget = d.integer(forKey: "opencodeDailyTokenBudget")
         showLiveSessions = d.object(forKey: "showLiveSessions") as? Bool ?? true
         launchAtLogin = d.bool(forKey: "launchAtLogin")
-        checkForUpdates = d.object(forKey: "checkForUpdates") as? Bool ?? true
     }
 
     var orderedEnabledProviders: [ProviderID] {

@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         UsageStore.shared.start()
         statusItem = StatusItemController(store: UsageStore.shared)
-        UpdateChecker.shared.startAutomaticChecks(settings: AppSettings.shared)
+        UpdateChecker.shared.start()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

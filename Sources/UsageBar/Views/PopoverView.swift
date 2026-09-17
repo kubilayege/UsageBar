@@ -3,6 +3,7 @@ import SwiftUI
 struct PopoverView: View {
     @EnvironmentObject var store: UsageStore
     @EnvironmentObject var settings: AppSettings
+    @ObservedObject private var updates = UpdateChecker.shared
     var viewportHeight: CGFloat = 720
 
     private let width: CGFloat = 400
@@ -238,16 +239,17 @@ struct PopoverView: View {
 
             Spacer(minLength: 0)
 
-            if UpdateChecker.shared.isUpdateAvailable, let latest = UpdateChecker.shared.latest {
-                Button { NotificationCenter.default.post(name: .usageBarOpenSettings, object: nil) } label: {
+            if let version = updates.availableVersion {
+                Button { updates.check() } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "arrow.down.circle.fill").font(.system(size: 12))
-                        Text("Update \(latest.version)").font(.system(size: 12, weight: .semibold))
+                        Text("Update \(version)").font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(ChipButtonStyle())
-                .help("UsageBar \(latest.version) is available. Opens Settings → Updates.")
+                .disabled(!updates.canCheckForUpdates)
+                .help("Review and install UsageBar \(version).")
             }
 
             Button {

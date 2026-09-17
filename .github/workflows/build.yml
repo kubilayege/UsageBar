@@ -1,12 +1,12 @@
 name: Build
 
 # Run manually from the Actions tab. Publishing creates a GitHub release tagged v<version>
-# with the DMG attached; the app's built-in update check reads the latest release.
+# with the DMG, signed Sparkle update archive, and signed appcast attached.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to build (e.g. 1.2.0). Leave empty to use scripts/build-app.sh's default.
+        description: Version to build (e.g. 1.3.0). Leave empty to use scripts/build-app.sh's default.
         required: false
         type: string
       publish:
@@ -45,11 +45,23 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          PUBLISH: ${{ inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          v="${{ inputs.version }}"
+          v="$REQUESTED_VERSION"
           if [ -z "$v" ]; then v="$(sed -n 's/^VERSION="\${VERSION:-\(.*\)}"$/\1/p' scripts/build-app.sh)"; fi
-          [ -n "$v" ] || { echo "could not resolve version"; exit 1; }
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be major.minor.patch"; exit 1; }
+          if [ "$PUBLISH" = true ] && gh release view "v$v" >/dev/null 2>&1; then
+            echo "v$v already exists. Publish a higher version instead of replacing a release."
+            exit 1
+          fi
+          if [ "$PUBLISH" = true ]; then
+            latest="$(gh release view --json tagName --jq .tagName)"
+            python3 -c 'import sys; version = lambda s: tuple(map(int, s.removeprefix("v").split("."))); assert version(sys.argv[1]) > version(sys.argv[2]), "Publish a version higher than the latest release"' "$v" "$latest"
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Building UsageBar $v"
 
@@ -63,9 +75,21 @@ jobs:
         id: dmg
         run: VERSION="${{ steps.version.outputs.version }}" scripts/build-dmg.sh
 
+      - name: Package and sign Sparkle update
+        id: update
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          NOTES: ${{ inputs.notes }}
+        run: scripts/build-update.sh
+
       - name: Render previews
         run: |
-          .build/release/UsageBar --render-preview build/preview-popover.png --render-dashboard build/preview-dashboard.png || true
+          build/UsageBar.app/Contents/MacOS/UsageBar --render-preview build/preview-popover.png --render-dashboard build/preview-dashboard.png --render-settings build/preview-settings.png
+
+      - name: Verify Sparkle installation on a temporary app
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: python3 scripts/test-update.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -74,6 +98,8 @@ jobs:
           path: |
             ${{ steps.dmg.outputs.dmg }}
             ${{ steps.dmg.outputs.dmg }}.sha256
+            ${{ steps.update.outputs.archive }}
+            ${{ steps.update.outputs.appcast }}
             build/preview-*.png
           if-no-files-found: error
 
@@ -83,6 +109,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           DMG: ${{ steps.dmg.outputs.dmg }}
+          UPDATE_ARCHIVE: ${{ steps.update.outputs.archive }}
+          APPCAST: ${{ steps.update.outputs.appcast }}
           NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
@@ -93,9 +121,6 @@ jobs:
             printf 'Apple silicon build, ad-hoc signed (not notarized): right-click → Open on first launch, or `xattr -d com.apple.quarantine`.\n\n'
             printf 'SHA-256 `%s`\n' "$sha"
           } > release-notes.md
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$DMG" "${DMG}.sha256" --clobber
-            gh release edit "$tag" --notes-file release-notes.md
-          else
-            gh release create "$tag" "$DMG" "${DMG}.sha256" --title "UsageBar ${VERSION}" --notes-file release-notes.md --target "$GITHUB_SHA"
-          fi
+          # Publish only after every asset is uploaded, so the latest feed never points at an incomplete release.
+          gh release create "$tag" "$DMG" "${DMG}.sha256" "$UPDATE_ARCHIVE" "$APPCAST" --draft --title "UsageBar ${VERSION}" --notes-file release-notes.md --target "$GITHUB_SHA"
+          gh release edit "$tag" --draft=false --latest

@@ -6,19 +6,21 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="UsageBar"
 BUNDLE_ID="com.kubilay.usagebar"
-VERSION="${VERSION:-1.2.2}"
+VERSION="${VERSION:-1.3.0}"
 OUT="build/${APP_NAME}.app"
 ICON="Sources/UsageBar/Resources/AppLogo.png"
 [[ -f "$ICON" ]] || { echo "missing app artwork: $ICON"; exit 1; }
+PUBLIC_KEY="$(cat scripts/sparkle-public-key.txt)"
 
 swift build -c release 2>&1 | tail -3
 BIN=".build/release/${APP_NAME}"
 [[ -x "$BIN" ]] || { echo "build failed: $BIN missing"; exit 1; }
 
 rm -rf "$OUT"
-mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
+mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$OUT/Contents/Frameworks"
 cp "$BIN" "$OUT/Contents/MacOS/${APP_NAME}"
 cp "$ICON" "$OUT/Contents/Resources/AppLogo.png"
+ditto .build/release/Sparkle.framework "$OUT/Contents/Frameworks/Sparkle.framework"
 
 cat > "$OUT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -38,6 +40,14 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>https://github.com/kubilayege/UsageBar/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>${PUBLIC_KEY}</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUSendProfileInfo</key><false/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>Used to open agent sessions in your terminal and request administrator authorization for changing the macOS sleep setting.</string>
   <key>NSHumanReadableCopyright</key><string>Local-only usage tracker. No telemetry.</string>
 </dict>
@@ -55,8 +65,8 @@ done
 iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 
-# Ad-hoc sign so the bundle identity is stable for Keychain / notifications.
-codesign --force --deep --sign - "$OUT"
+# Preserve the vendor signatures on Sparkle's nested helpers when signing the outer app.
+codesign --force --sign - "$OUT"
 codesign --verify --deep --strict "$OUT"
 echo "built $OUT"
 

@@ -46,7 +46,7 @@ struct SettingsView: View {
                 Toggle("Crossing 75% / 90% / 100%", isOn: $settings.notifyThresholds).disabled(!settings.notificationsEnabled)
                 Toggle("Window reset (usage available again)", isOn: $settings.notifyResets).disabled(!settings.notificationsEnabled)
                 if !AppSettings.isBundled {
-                    Text("Notifications need the .app bundle — run `make install`.").font(.caption).foregroundStyle(.secondary)
+                    Text("Notifications are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section("Behavior") {
@@ -72,7 +72,7 @@ struct SettingsView: View {
                 Button("View usage history…") { DashboardWindowController.shared.show() }
             }
             Section("Updates") {
-                UpdateSettingsRows(settings: settings, updates: updates)
+                UpdateSettingsRows(updates: updates)
             }
             Section("Privacy") {
                 Text("UsageBar reads the credentials your CLIs already store locally and talks only to each vendor's own usage endpoint, plus GitHub for the LiteLLM price list and update checks. History and activity caches live in ~/Library/Application Support/UsageBar. No telemetry.")
@@ -86,7 +86,6 @@ struct SettingsView: View {
 }
 
 struct UpdateSettingsRows: View {
-    @ObservedObject var settings: AppSettings
     @ObservedObject var updates: UpdateChecker
 
     var body: some View {
@@ -95,57 +94,32 @@ struct UpdateSettingsRows: View {
             Spacer()
             Text(UpdateChecker.currentVersion ?? "development build").foregroundStyle(.secondary).monospacedDigit()
         }
-        Toggle("Check for updates daily", isOn: $settings.checkForUpdates)
+        Toggle("Check for updates daily", isOn: Binding(
+            get: { updates.automaticallyChecksForUpdates },
+            set: { updates.setAutomaticChecksEnabled($0) }
+        )).disabled(!updates.isEnabled)
         HStack {
-            Button(updates.phase == .checking ? "Checking…" : "Check now") { Task { await updates.check() } }
-                .disabled(updates.phase == .checking)
+            Button(updates.isUpdateAvailable ? "Review Update…" : "Check for Updates…") { updates.check() }
+                .disabled(!updates.canCheckForUpdates)
             Spacer()
             if let checked = updates.lastChecked {
-                Text("Last success \(Format.relative(checked))").font(.caption).foregroundStyle(.secondary)
+                Text("Checked \(Format.relative(checked))").font(.caption).foregroundStyle(.secondary)
             }
         }
-        if let latest = updates.latest {
-            if updates.isUpdateAvailable {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(Theme.accent)
-                        Text("UsageBar \(latest.version) is available").fontWeight(.semibold)
-                        Spacer()
-                        Link("Release notes", destination: latest.page).font(.caption)
-                    }
-                    if !latest.notes.isEmpty {
-                        Text(latest.notes).font(.caption).foregroundStyle(.secondary).lineLimit(6)
-                    }
-                    HStack(spacing: 10) {
-                        switch updates.phase {
-                        case .downloading(let fraction):
-                            ProgressView(value: fraction).frame(width: 160)
-                            Text("Downloading \(Int(fraction * 100))%").font(.caption).foregroundStyle(.secondary)
-                        case .verifying:
-                            ProgressView().controlSize(.small)
-                            Text("Verifying checksum…").font(.caption).foregroundStyle(.secondary)
-                        case .opened(let file):
-                            Button("Download again") { Task { await updates.downloadAndOpen() } }
-                            Text("Opened \(file.lastPathComponent). Drag UsageBar to Applications, then relaunch.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        default:
-                            Button("Download and open…") { Task { await updates.downloadAndOpen() } }
-                                .buttonStyle(.borderedProminent)
-                            Text("Saves the DMG to Downloads, verifies its SHA-256 and mounts it.").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } else if updates.phase == .idle {
-                Text("You have the latest release (\(latest.version)).").font(.caption).foregroundStyle(.secondary)
-            }
-        } else if updates.hasNoPublishedRelease {
-            Text("No published release found yet.").font(.caption).foregroundStyle(.secondary)
+        if let version = updates.availableVersion {
+            Label("UsageBar \(version) is available", systemImage: "arrow.down.circle.fill")
+                .foregroundStyle(Theme.accent)
+        } else if updates.phase == .noUpdate {
+            Text("No updates available.").font(.caption).foregroundStyle(.secondary)
         }
         if case .failed(let message) = updates.phase {
             Text(message).font(.caption).foregroundStyle(Theme.caution)
         }
-        Link("Open Releases", destination: UpdateChecker.releasesPage).font(.caption)
-        Text("Releases are built by the GitHub Actions workflow in this repository and downloaded from github.com/\(UpdateChecker.repository).")
+        Text("Download updates securely, then install and restart UsageBar when you’re ready.")
             .font(.caption).foregroundStyle(.secondary)
+        if !AppSettings.isBundled {
+            Text("Updates are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
+        }
+        Link("Release notes", destination: UpdateChecker.releasesPage).font(.caption)
     }
 }
