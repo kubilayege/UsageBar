@@ -5,82 +5,86 @@ struct SettingsView: View {
     @ObservedObject private var updates = UpdateChecker.shared
 
     var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 12) {
-                    AppLogoView(size: 52)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("UsageBar").font(.system(size: 19, weight: .bold, design: .rounded))
-                        Text("AI usage at a glance").font(.callout).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Settings")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Choose what you track and how UsageBar behaves.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
             }
-            Section("Providers") {
-                ForEach(ProviderID.allCases) { id in
-                    Toggle(isOn: Binding(get: { settings.enabledProviders.contains(id) }, set: { _ in settings.toggle(id) })) {
-                        HStack(spacing: 8) {
-                            ProviderDot(id: id, size: 9)
-                            Text(id.displayName)
-                            if id.isExperimental { Badge(text: "experimental", color: Theme.textMuted) }
+            .padding(.horizontal, 20)
+            .padding(.top, 28)
+            .padding(.bottom, 8)
+
+            Form {
+                Section("Providers") {
+                    ForEach(ProviderID.allCases) { id in
+                        Toggle(isOn: Binding(get: { settings.enabledProviders.contains(id) }, set: { _ in settings.toggle(id) })) {
+                            HStack(spacing: 8) {
+                                ProviderDot(id: id, size: 9)
+                                Text(id.displayName)
+                                if id.isExperimental { Badge(text: "experimental", color: Theme.textMuted) }
+                            }
                         }
                     }
                 }
-            }
-            Section("Refresh") {
-                Picker("Interval", selection: $settings.refreshInterval) {
-                    ForEach(AppSettings.refreshChoices, id: \.self) { Text(Format.interval($0)).tag($0) }
+                Section("Refresh") {
+                    Picker("Interval", selection: $settings.refreshInterval) {
+                        ForEach(AppSettings.refreshChoices, id: \.self) { Text(Format.interval($0)).tag($0) }
+                    }
+                    Text("Each provider also has a floor (Claude 2 min, Codex and Cursor 1 min). A 429 doubles the wait until a few refreshes succeed. The last good numbers are kept on disk across relaunches.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Each provider also has a floor (Claude 2 min, Codex and Cursor 1 min). A 429 doubles the wait until a few refreshes succeed. The last good numbers are kept on disk across relaunches.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Menu bar") {
-                Picker("Style", selection: $settings.menuBarMode) {
-                    ForEach(MenuBarMode.allCases) { Text($0.label).tag($0) }
+                Section("Menu bar") {
+                    Picker("Style", selection: $settings.menuBarMode) {
+                        ForEach(MenuBarMode.allCases) { Text($0.label).tag($0) }
+                    }
+                    Toggle("Show pace indicator (↗ risky, ⚠︎ over)", isOn: $settings.showPaceInMenuBar)
                 }
-                Toggle("Show pace indicator (↗ risky, ⚠︎ over)", isOn: $settings.showPaceInMenuBar)
-            }
-            Section("Notifications") {
-                Toggle("Enable notifications", isOn: $settings.notificationsEnabled)
-                Toggle("Crossing 75% / 90% / 100%", isOn: $settings.notifyThresholds).disabled(!settings.notificationsEnabled)
-                Toggle("Window reset (usage available again)", isOn: $settings.notifyResets).disabled(!settings.notificationsEnabled)
-                if !AppSettings.isBundled {
-                    Text("Notifications are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
+                Section("Notifications") {
+                    Toggle("Enable notifications", isOn: $settings.notificationsEnabled)
+                    Toggle("Crossing 75% / 90% / 100%", isOn: $settings.notifyThresholds).disabled(!settings.notificationsEnabled)
+                    Toggle("Window reset (usage available again)", isOn: $settings.notifyResets).disabled(!settings.notificationsEnabled)
+                    if !AppSettings.isBundled {
+                        Text("Notifications are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section("Behavior") {
+                    SleepControlView()
+                    Toggle("Launch at login", isOn: $settings.launchAtLogin).disabled(!AppSettings.isBundled)
+                    Toggle("Compact popover", isOn: $settings.compactPopover)
+                    Toggle("Show live sessions", isOn: $settings.showLiveSessions)
+                    HStack {
+                        Text("OpenCode daily token budget")
+                        Spacer()
+                        TextField("0 = none", value: $settings.opencodeDailyTokenBudget, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                Section("Usage analysis") {
+                    Button("Analyze usage & effort…") {
+                        NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil)
+                    }
+                    Text("Compare models and reasoning effort over a custom time range, with token rates and monthly plan costs you can edit.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Updates") {
+                    UpdateSettingsRows(updates: updates)
+                }
+                Section("Privacy") {
+                    Text("UsageBar reads the credentials your CLIs already store locally and talks only to each vendor's own usage endpoint, plus GitHub for the LiteLLM price list and update checks. History and activity caches live in ~/Library/Application Support/UsageBar. No telemetry.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            Section("Behavior") {
-                SleepControlView()
-                Toggle("Launch at login", isOn: $settings.launchAtLogin).disabled(!AppSettings.isBundled)
-                Toggle("Compact popover", isOn: $settings.compactPopover)
-                Toggle("Show live sessions", isOn: $settings.showLiveSessions)
-                HStack {
-                    Text("OpenCode daily token budget")
-                    Spacer()
-                    TextField("0 = none", value: $settings.opencodeDailyTokenBudget, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 120)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-            Section("Usage analysis") {
-                Button("Analyze usage & effort…") {
-                    NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil)
-                }
-                Text("Compare models and reasoning effort over a custom time range, with token rates and monthly plan costs you can edit.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("View usage history…") { DashboardWindowController.shared.show() }
-            }
-            Section("Updates") {
-                UpdateSettingsRows(updates: updates)
-            }
-            Section("Privacy") {
-                Text("UsageBar reads the credentials your CLIs already store locally and talks only to each vendor's own usage endpoint, plus GitHub for the LiteLLM price list and update checks. History and activity caches live in ~/Library/Application Support/UsageBar. No telemetry.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
         }
-        .formStyle(.grouped)
+        .background(Theme.bg)
         .preferredColorScheme(.dark)
     }
 }

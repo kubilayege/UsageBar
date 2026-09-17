@@ -74,11 +74,13 @@ struct DashboardView: View {
                         Spacer()
                     }
                     .foregroundStyle(store.dashboardTab == t ? Theme.textPrimary : Theme.textSecondary)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 40)
                     .background(RoundedRectangle(cornerRadius: 8).fill(store.dashboardTab == t ? Theme.chipSelected : .clear))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(store.dashboardTab == t ? .isSelected : [])
             }
 
             Text("PROVIDERS").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.textMuted).padding(.top, 16).padding(.leading, 10)

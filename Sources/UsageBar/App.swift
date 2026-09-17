@@ -15,19 +15,17 @@ struct UsageBarApp: App {
     }
 
     var body: some Scene {
-        // The menu bar item, popover and dashboard are managed in AppKit (see StatusItemController)
-        // so the menu bar text can be colored per provider. This scene only hosts Settings.
-        Settings {
-            SettingsView()
-                .environmentObject(AppSettings.shared)
-                .frame(width: 480, height: 640)
-        }
+        // AppKit owns the menu bar item, popover and shared dashboard window.
+        // This scene supplies commands; Settings opens a page in the dashboard.
+        Settings { EmptyView() }
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { NotificationCenter.default.post(name: .usageBarOpenSettings, object: nil) }
                     .keyboardShortcut(",", modifiers: .command)
             }
             CommandMenu("Usage") {
+                Button("Open Dashboard") { NotificationCenter.default.post(name: .usageBarOpenDashboard, object: nil) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Show Usage Popup") { NotificationCenter.default.post(name: .usageBarTogglePopover, object: nil) }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Analyze Usage & Effort…") { NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil) }
@@ -58,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        SettingsWindowController.shared.show()
+        DashboardWindowController.shared.show()
         return false
     }
 }
@@ -109,6 +107,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .usageBarTogglePopover)
             .sink { [weak self] _ in self?.togglePopover() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .usageBarOpenDashboard)
+            .sink { [weak self] _ in self?.openDashboard() }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: .usageBarOpenAnalysis)
             .sink { [weak self] _ in
@@ -195,6 +196,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private func presentContextMenu() {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let dashboard = menu.addItem(withTitle: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d")
+        dashboard.target = self
+        dashboard.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(withTitle: "Refresh now", action: #selector(refreshNow), keyEquivalent: "r").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
@@ -210,15 +214,20 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func refreshNow() { Task { await store.refreshAll(force: true) } }
+    @objc private func openDashboard() {
+        popover.performClose(nil)
+        DashboardWindowController.shared.show()
+    }
     @objc private func openSettings() {
         popover.performClose(nil)
-        SettingsWindowController.shared.show()
+        DashboardWindowController.shared.show(tab: .settings)
     }
     @objc private func toggleSleep() { Task { await store.sleepControl.toggle() } }
 }
 
 extension Notification.Name {
     static let usageBarTogglePopover = Notification.Name("UsageBarTogglePopover")
+    static let usageBarOpenDashboard = Notification.Name("UsageBarOpenDashboard")
     static let usageBarOpenSettings = Notification.Name("UsageBarOpenSettings")
     static let usageBarOpenAnalysis = Notification.Name("UsageBarOpenAnalysis")
 }
@@ -252,31 +261,6 @@ enum MenuBarIcon {
 }
 
 @MainActor
-final class SettingsWindowController {
-    static let shared = SettingsWindowController()
-    private(set) var window: NSWindow?
-
-    func show() {
-        if window == nil {
-            let host = NSHostingController(rootView: SettingsView().environmentObject(AppSettings.shared))
-            let w = NSWindow(contentViewController: host)
-            w.title = "UsageBar Settings"
-            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            w.appearance = NSAppearance(named: .darkAqua)
-            w.isReleasedWhenClosed = false
-            w.setContentSize(NSSize(width: 520, height: 700))
-            w.minSize = NSSize(width: 460, height: 440)
-            w.center()
-            window = w
-        }
-        window?.deminiaturize(nil)
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        Task { await SleepControl.shared.refresh() }
-    }
-}
-
-@MainActor
 final class AnalysisWindowController {
     static let shared = AnalysisWindowController()
     private var window: NSWindow?
@@ -306,9 +290,10 @@ final class DashboardWindowController {
     static let shared = DashboardWindowController()
     private var window: NSWindow?
 
-    func show() {
+    func show(tab: DashboardTab = .overview) {
+        let store = UsageStore.shared
+        store.dashboardTab = tab
         if window == nil {
-            let store = UsageStore.shared
             let host = NSHostingController(rootView: DashboardView().environmentObject(store).environmentObject(store.settings))
             let w = NSWindow(contentViewController: host)
             w.title = "UsageBar Dashboard"
@@ -324,8 +309,11 @@ final class DashboardWindowController {
             w.setFrameAutosaveName("UsageBarDashboard")
             window = w
         }
+        window?.deminiaturize(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        store.refreshLiveSessions()
+        Task { await store.sleepControl.refresh() }
     }
 }
 
@@ -386,9 +374,11 @@ enum PreviewRenderer {
             render(PopoverView(viewportHeight: 560).environmentObject(store).environmentObject(store.settings), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-settings"), i + 1 < args.count {
-            render(SettingsView().environmentObject(store.settings).frame(width: 520, height: 700), to: args[i + 1])
+            store.dashboardTab = .settings
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-dashboard"), i + 1 < args.count {
+            store.dashboardTab = .overview
             render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-history"), i + 1 < args.count {

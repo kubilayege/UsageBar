@@ -14,7 +14,7 @@ A native macOS menu bar app that tracks your AI coding-agent quotas in one place
 - Backs off automatically when a vendor rate-limits the usage endpoint, keeping the last good numbers on screen
 - Disable Sleep control in both popup sizes and Settings, backed by `pmset -b disablesleep 1` / `0`
 - Codex banked reset counts, including the number currently applicable
-- Direct Settings button and a fixed-size popup with scrolling content
+- Direct Dashboard button, a Settings shortcut into the same window, and a fixed-size popup with scrolling content
 - Usage & effort analysis across a custom 1–120 day range: tokens per assistant turn, model/effort groups, editable API cost estimates and monthly subscription allocation
 - Launch at login and configurable refresh interval
 - Everything stays on your Mac: no accounts, no telemetry, no servers of ours
@@ -46,6 +46,8 @@ make preview                                  # render the popover and dashboard
 ```
 
 The shared app artwork is [`Sources/UsageBar/Resources/AppLogo.png`](Sources/UsageBar/Resources/AppLogo.png). SwiftPM includes it for development; the workflow embeds it in the bundle and generates the full macOS `AppIcon.icns` size set. The popup, dashboard, and Settings use the same logo, with a simplified white mark in the menu bar. The generation prompt is recorded in [`docs/branding/app-logo.md`](docs/branding/app-logo.md).
+
+Click **Dashboard** in the popup to open Overview, then use the sidebar for History and Settings. The gear button and **⌘,** open Settings in that same window. **Open Dashboard** is also available in the menu bar icon’s right-click menu and the **Usage** menu (**⇧⌘D**). Reopening UsageBar returns to the dashboard overview.
 
 ## How each provider is read
 

@@ -194,6 +194,13 @@ struct PopoverView: View {
     // MARK: Footer
 
     private var footer: some View {
+        VStack(spacing: 10) {
+            utilityActions
+            navigationActions
+        }
+    }
+
+    private var utilityActions: some View {
         HStack(spacing: 8) {
             Button { Task { await store.refreshAll(force: true) } } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
@@ -251,25 +258,44 @@ struct PopoverView: View {
                 .disabled(!updates.canCheckForUpdates)
                 .help("Review and install UsageBar \(version).")
             }
+        }
+    }
+
+    private var navigationActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                NotificationCenter.default.post(name: .usageBarOpenDashboard, object: nil)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.grid.2x2").font(.system(size: 13))
+                    Text("Dashboard").font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Theme.textPrimary)
+                .frame(maxWidth: .infinity, minHeight: 22)
+            }
+            .buttonStyle(ChipButtonStyle(selected: true))
+            .help("Open the dashboard overview")
 
             Button {
                 NotificationCenter.default.post(name: .usageBarOpenSettings, object: nil)
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape").font(.system(size: 12))
-                    Text("Settings").font(.system(size: 13, weight: .medium))
-                }
-                .foregroundStyle(Theme.textSecondary)
+                Image(systemName: "gearshape").font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(width: 16, height: 22)
             }
             .buttonStyle(ChipButtonStyle())
+            .accessibilityLabel("Settings")
+            .help("Open Settings in the dashboard")
 
             Button { NSApp.terminate(nil) } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "power").font(.system(size: 12))
-                }
-                .foregroundStyle(Theme.textSecondary)
+                Image(systemName: "power").font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(width: 16, height: 22)
             }
             .buttonStyle(ChipButtonStyle())
+            .accessibilityLabel("Quit UsageBar")
             .help("Quit UsageBar")
         }
     }
