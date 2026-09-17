@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 
 
 def run(*args, **kwargs):
@@ -67,26 +68,43 @@ def main():
                 f"https://github.com/kubilayege/UsageBar/releases/download/v{version}/", prefix))
             run(tools / "sign_update", "--ed-key-file", "-", feed, input=secret)
 
-            def check(feed_name="appcast.xml", probe=False, succeeds=True):
+            def wait_for_installer_exit():
+                # sparkle-cli exits as soon as its update cycle ends. The separate
+                # installer/progress helpers can still be closing their XPC services.
+                deadline = time.monotonic() + 30
+                while True:
+                    processes = subprocess.check_output(["ps", "-axo", "args="], text=True).splitlines()
+                    helpers = [process for process in processes if
+                        ("Autoupdate " in process and info["CFBundleIdentifier"] in process) or
+                        ("/Updater.app/Contents/MacOS/Updater " in process and str(host) in process)]
+                    if not helpers:
+                        return
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(f"Sparkle helpers did not exit after the check: {helpers}")
+                    time.sleep(0.2)
+
+            def check(feed_name="appcast.xml", probe=False, expected_error=None):
                 result = subprocess.run([str(cli), str(host), "--feed-url", prefix + feed_name,
                     "--probe" if probe else "--check-immediately", "--verbose"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180)
                 print(result.stdout, flush=True)
-                if succeeds and result.returncode != 0:
+                if expected_error is None and result.returncode != 0:
                     raise RuntimeError(f"Sparkle update failed ({result.returncode})")
-                if not succeeds and result.returncode != 1:
+                if expected_error is not None and (result.returncode != 1 or f"error {expected_error} (SUSparkleErrorDomain)" not in result.stdout):
                     raise RuntimeError(f"Expected Sparkle to reject the modified update ({result.returncode})")
+                if not probe:
+                    wait_for_installer_exit()
 
             check(probe=True)
             # Signed feeds must reject even an innocuous edit to their contents.
             (webroot / "modified.xml").write_text(feed.read_text().replace("</channel>", "<!-- modified -->\n</channel>"))
-            check("modified.xml", probe=True, succeeds=False)
+            check("modified.xml", probe=True, expected_error=1000)
             # Keep the byte count unchanged so only the archive signature can catch this.
             with served_archive.open("r+b") as file:
                 first = file.read(1)
                 file.seek(0)
                 file.write(bytes([first[0] ^ 1]))
-            check(succeeds=False)
+            check(expected_error=4005)
             with plist.open("rb") as file:
                 assert plistlib.load(file)["CFBundleVersion"] == "0.0.0", "Rejected update changed the host"
             shutil.copyfile(archive, served_archive)
