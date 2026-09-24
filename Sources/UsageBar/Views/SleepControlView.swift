@@ -18,7 +18,9 @@ struct SleepControlView: View {
                 }
                 .buttonStyle(ChipButtonStyle())
                 .disabled(control.isChanging)
-                .help("Runs pmset -b disablesleep 1 or 0 with macOS administrator approval. macOS reports this as a system-wide setting; it persists after UsageBar quits.")
+                .help(control.isPasswordless
+                      ? "Runs pmset -b disablesleep 1 or 0 through UsageBar's passwordless sudo rule. macOS reports this as a system-wide setting; it persists after UsageBar quits."
+                      : "Runs pmset -b disablesleep 1 or 0 with macOS administrator approval. Settings can make this passwordless. macOS reports this as a system-wide setting; it persists after UsageBar quits.")
                 Spacer(minLength: 4)
                 Button { Task { await control.refresh() } } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 12))
@@ -33,5 +35,27 @@ struct SleepControlView: View {
             }
         }
         .task { if !RenderFlags.isRendering { await control.refresh() } }
+    }
+}
+
+/// Settings rows for authorizing sleep access once, with optional local authentication for later changes.
+struct SleepAccessRows: View {
+    @EnvironmentObject var settings: AppSettings
+    @ObservedObject private var control = SleepControl.shared
+
+    var body: some View {
+        Toggle("Change sleep without a password", isOn: Binding(
+            get: { control.isPasswordless },
+            set: { enabled in Task { await control.setPasswordless(enabled) } }))
+            .disabled(control.isChanging)
+        if control.isPasswordless {
+            Toggle("Confirm with Touch ID or password", isOn: $settings.confirmSleepWithTouchID)
+                .disabled(control.isChanging)
+        }
+        Text(control.isPasswordless
+             ? "Sleep access is enabled for your account. Confirmation applies to UsageBar; other apps running as your account can also change sleep. Turn this off to remove access."
+             : "Approve administrator access once, then confirm sleep changes with Touch ID or your login password. This also lets other apps running as your account change sleep without administrator approval.")
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

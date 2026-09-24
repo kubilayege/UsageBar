@@ -75,7 +75,11 @@ Gemini and Antigravity are implemented from public knowledge of those tools but 
 
 ## Sleep control
 
-The control reads `SleepDisabled` from `pmset -g` on launch, every 15 seconds, and when opened or refreshed. Changes use the macOS administrator prompt; UsageBar never collects a password. The displayed state is read back after success, cancellation, or failure. macOS reports `disablesleep` as system-wide even with `-b`; it persists after UsageBar quits. The former coffee/idle-sleep assertion preference is no longer applied.
+The control reads `SleepDisabled` from `pmset -g` on launch, every 15 seconds, and when opened or refreshed. By default, changes use the macOS administrator prompt; UsageBar never collects or stores a password. The displayed state is read back after success, cancellation, or failure. macOS reports `disablesleep` as system-wide even with `-b`; it persists after UsageBar quits. The former coffee/idle-sleep assertion preference is no longer applied.
+
+To approve administrator access once, turn on **Settings → Change sleep without a password**. UsageBar installs a root-owned, validated `/etc/sudoers.d/usagebar-<uid>` rule for your account's numeric user ID. The rule permits only `/usr/bin/pmset -b disablesleep 0` and `1`; later changes use `sudo -n`. **Confirm with Touch ID or password** is on by default. Authentication must succeed before UsageBar changes sleep; cancelling or unavailable authentication leaves the setting unchanged. You can turn confirmation off for one-click changes.
+
+This permission also lets other apps running as your account use those two commands. Confirmation protects UsageBar's button only. Turning passwordless access off removes the rule after administrator approval. To remove it manually, run `sudo rm /etc/sudoers.d/usagebar-$(id -u)`. If the rule is rejected, UsageBar falls back to the administrator prompt and explains how to repair access.
 
 ## Usage & effort analysis
 

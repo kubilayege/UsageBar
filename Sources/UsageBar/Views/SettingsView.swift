@@ -53,6 +53,7 @@ struct SettingsView: View {
                 }
                 Section("Behavior") {
                     SleepControlView()
+                    SleepAccessRows()
                     Toggle("Launch at login", isOn: $settings.launchAtLogin).disabled(!AppSettings.isBundled)
                     Toggle("Compact popover", isOn: $settings.compactPopover)
                     Toggle("Show live sessions", isOn: $settings.showLiveSessions)
