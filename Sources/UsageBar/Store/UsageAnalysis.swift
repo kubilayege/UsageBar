@@ -125,10 +125,11 @@ enum UsageAnalysisScanner {
         var turns: [String: AnalysisTurn] = [:]
         var model = "Not recorded", effort: String?, previousTotal: [String: Int]?
         var session = SessionProcess.sessionKey(path)
+        let needles = ["\"usage\"", "\"token_count\"", "\"turn_context\"", "\"session_meta\""].map { Array($0.utf8) }
         for line in data.split(separator: 10) {
             // Only decode metadata and token records; message text is never retained.
-            let interesting = ["\"usage\"", "\"token_count\"", "\"turn_context\"", "\"session_meta\""].contains {
-                line.range(of: Data($0.utf8)) != nil
+            let interesting = line.withUnsafeBytes { raw in
+                needles.contains { memmem(raw.baseAddress, raw.count, $0, $0.count) != nil }
             }
             guard interesting, let record = try? JSONSerialization.jsonObject(with: Data(line)) as? JSON else { continue }
             if provider == .claude {

@@ -150,14 +150,15 @@ enum ActivityScanner {
         return out
     }
 
-    private struct ByteLine {
+    struct ByteLine {
         let base: UnsafePointer<UInt8>
         let count: Int
 
-        func find(_ needle: [UInt8], from: Int = 0) -> Int? {
-            guard from < count, needle.count <= count - from else { return nil }
+        func find(_ needle: [UInt8], from: Int = 0, to end: Int? = nil) -> Int? {
+            let limit = min(count, end ?? count)
+            guard from < limit, needle.count <= limit - from else { return nil }
             return needle.withUnsafeBufferPointer { nb -> Int? in
-                guard let hit = memmem(base + from, count - from, nb.baseAddress, nb.count) else { return nil }
+                guard let hit = memmem(base + from, limit - from, nb.baseAddress, nb.count) else { return nil }
                 return UnsafeRawPointer(hit) - UnsafeRawPointer(base)
             }
         }
@@ -184,7 +185,7 @@ enum ActivityScanner {
         }
     }
 
-    private static func forEachLine(_ path: String, containing needle: [UInt8], _ body: (ByteLine) -> Void) {
+    static func forEachLine(_ path: String, containing needle: [UInt8]? = nil, _ body: (ByteLine) -> Void) {
         guard let data = FileManager.default.contents(atPath: path) else { return }
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
@@ -199,7 +200,7 @@ enum ActivityScanner {
                 }
                 if end > start {
                     let line = ByteLine(base: base + start, count: end - start)
-                    if line.contains(needle) { body(line) }
+                    if needle.map(line.contains) ?? true { body(line) }
                 }
                 start = end + 1
             }

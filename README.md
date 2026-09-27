@@ -10,6 +10,7 @@ A native macOS menu bar app that tracks your AI coding-agent quotas in one place
 - Service health chips from each vendor's status page
 - Notifications when you cross 75 / 90 / 100 % and when a window resets
 - Dashboard with a limit-usage trend chart and a GitHub-style activity heatmap built from your local session logs
+- Work Log: a daily, weekly or monthly receipt of what your agents worked on, grouped by project, with one-click copy for the whole receipt, a project, or a single session (text, Markdown, CSV, or a receipt image)
 - Live sessions: recent activity and individually identified running sessions, with structured Claude/Codex metadata and 15-second local refreshes
 - Backs off automatically when a vendor rate-limits the usage endpoint, keeping the last good numbers on screen
 - Disable Sleep control in both popup sizes and Settings, backed by `pmset -b disablesleep 1` / `0`
@@ -42,12 +43,36 @@ For development:
 swift build && .build/debug/UsageBar          # run without a bundle (no notifications / launch-at-login)
 .build/debug/UsageBar --probe                 # fetch every provider once and print the result
 .build/debug/UsageBar --probe --no-activity   # same, skipping the local log scan
+.build/debug/UsageBar --receipt               # print today's work receipt (see Work Log below)
 make preview                                  # render the popover and dashboard to PNG with demo data
 ```
 
 The shared app artwork is [`Sources/UsageBar/Resources/AppLogo.png`](Sources/UsageBar/Resources/AppLogo.png). SwiftPM includes it for development; the workflow embeds it in the bundle and generates the full macOS `AppIcon.icns` size set. The popup, dashboard, and Settings use the same logo, with a simplified white mark in the menu bar. The generation prompt is recorded in [`docs/branding/app-logo.md`](docs/branding/app-logo.md).
 
 Click **Dashboard** in the popup to open Overview, then use the sidebar for History, Analysis and Settings. **⌘,** and the menu bar icon’s right-click menu open Settings in that same window; **Usage → Analyze Usage & Effort…** opens the Analysis page. **Open Dashboard** is also available in the menu bar icon’s right-click menu and the **Usage** menu (**⇧⌘D**). Reopening UsageBar returns to the dashboard overview.
+
+## Work Log
+
+The **Today** button in the popup opens the dashboard's **Work Log** page. The copy button next to it puts today's receipt on the clipboard in one click. It is also in the menu bar icon's right-click menu and the **Usage** menu; **⇧⌘L** opens the page.
+
+The page reads Claude Code, Codex and OpenCode session logs and groups sessions by repository. Sub-agent sessions count toward their parent session. Each session is named with the agent's own session title, or the files it changed if there is no title. Each session also shows its time span, active time, model, branch, the files it edited, tokens and an estimated API cost. Use the **Day / Week / Month** control and arrows to change the range; week and month views add an active-time-by-day chart.
+
+- **Copy receipt** (⇧⌘C) copies the range as plain text or Markdown. Each project and session has its own copy button.
+- **Include** chooses what exports contain: files, times, and tokens & cost (off by default).
+- **Export** copies or saves Text, Markdown, CSV (one row per session per day, for timesheets), or a receipt-style PNG.
+- **Hide** (eye icon) leaves a project out of the page and every export, for client or NDA work. Hidden projects can be restored from the footer.
+- **Active time** joins activity less than the idle gap apart (15 minutes by default; change it in the footer). Parallel sessions are counted once, so the total is wall-clock time.
+
+Only timestamps, session titles, relative file paths and token counts are read and cached. Prompts, responses and file contents are not stored or shown.
+
+The same receipt is available from the terminal:
+
+```sh
+UsageBar --receipt                         # today, plain text
+UsageBar --receipt --yesterday --markdown
+UsageBar --receipt --week --csv            # or --month; --date 2026-09-15 picks the day
+UsageBar --receipt --usage --no-files      # add tokens & cost, drop file lists; --no-times drops times
+```
 
 ## How each provider is read
 
@@ -70,6 +95,7 @@ Gemini and Antigravity are implemented from public knowledge of those tools but 
 
 - `history.jsonl` — usage percentages over time (45-day rolling window) for the trend chart
 - `activity-cache.json` — per-file token counts parsed from Claude Code / Codex session logs
+- `worklog-cache.json` — per-file session timing, titles, relative paths of edited files and token counts for the Work Log; no prompt or response text
 - `analysis-cache.json` — numerical turn usage and model/effort metadata; no prompt or response text
 - `model-prices.json` — the last LiteLLM price list downloaded from GitHub (optional; the app ships with a snapshot)
 

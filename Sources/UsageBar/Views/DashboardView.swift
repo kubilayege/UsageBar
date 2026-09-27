@@ -2,11 +2,12 @@ import SwiftUI
 import Charts
 
 enum DashboardTab: String, CaseIterable, Identifiable {
-    case overview = "Overview", history = "History", analysis = "Analysis", settings = "Settings"
+    case overview = "Overview", workLog = "Work Log", history = "History", analysis = "Analysis", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .overview: return "square.grid.2x2"
+        case .workLog: return "receipt"
         case .history: return "chart.xyaxis.line"
         case .analysis: return "chart.bar.xaxis"
         case .settings: return "gearshape"
@@ -44,6 +45,7 @@ struct DashboardView: View {
             Group {
                 switch store.dashboardTab {
                 case .overview: OverviewTab()
+                case .workLog: WorkLogView()
                 case .history: HistoryTab()
                 case .analysis: UsageAnalysisView()
                 case .settings: SettingsView()

@@ -4,6 +4,7 @@ struct PopoverView: View {
     @EnvironmentObject var store: UsageStore
     @EnvironmentObject var settings: AppSettings
     @ObservedObject private var updates = UpdateChecker.shared
+    @ObservedObject private var workLog = WorkLogState.shared
     var viewportHeight: CGFloat = 720
 
     private let width: CGFloat = 400
@@ -277,6 +278,37 @@ struct PopoverView: View {
         .help(available.map { "Update \($0) is ready. Review and install it." } ?? "Check for updates")
     }
 
+    /// Today's work receipt: open it in the dashboard, or copy it straight away.
+    private var workLogButtons: some View {
+        let today = workLog.receipt(.today(), priced: false)
+        let copied = workLog.copiedID == "today"
+        return HStack(spacing: 4) {
+            Button {
+                NotificationCenter.default.post(name: .usageBarOpenWorkLog, object: nil)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "receipt").font(.system(size: 12))
+                    Text("Today").font(.system(size: 12, weight: .semibold))
+                    Text(today.map { Format.hm($0.activeMinutes) } ?? "…").font(Theme.smallNumberFont).foregroundStyle(Theme.textSecondary)
+                }
+                .foregroundStyle(Theme.textPrimary)
+                .fixedSize()
+            }
+            .buttonStyle(ChipButtonStyle())
+            .help(today.map { "Today's work log: " + WorkReceiptExport.summary($0, workLog.options) } ?? "Open today's work log")
+
+            Button { workLog.copyToday() } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(copied ? Theme.ok : Theme.textSecondary)
+                    .frame(width: 14, height: 16)
+            }
+            .buttonStyle(ChipButtonStyle())
+            .accessibilityLabel("Copy today's work receipt")
+            .help("Copy today's work receipt as \(settings.workCopyFormat.rawValue.lowercased())")
+        }
+    }
+
     private var navigationActions: some View {
         HStack(spacing: 8) {
             Button {
@@ -292,6 +324,8 @@ struct PopoverView: View {
             }
             .buttonStyle(ChipButtonStyle(selected: true))
             .help("Open the dashboard: overview, history, analysis and settings")
+
+            workLogButtons
 
             Spacer(minLength: 0)
 

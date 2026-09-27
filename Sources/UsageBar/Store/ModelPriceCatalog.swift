@@ -100,6 +100,8 @@ final class ModelPriceStore: ObservableObject {
         }
     }
 
+    nonisolated static func diskCatalog() -> ModelPriceCatalog { loadFromDisk() }
+
     nonisolated private static func loadFromDisk() -> ModelPriceCatalog {
         let cached = (try? Data(contentsOf: cacheURL)).flatMap { ModelPriceCatalog.parse($0, source: "cache") }
         if let cached, cached.updated > ModelPriceCatalog.bundled.updated { return cached }

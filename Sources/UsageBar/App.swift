@@ -12,6 +12,7 @@ struct UsageBarApp: App {
         PreviewRenderer.runIfRequested()
         Probe.runIfRequested()
         RevealProbe.runIfRequested()
+        WorkReceiptCLI.runIfRequested()
     }
 
     var body: some Scene {
@@ -29,6 +30,10 @@ struct UsageBarApp: App {
                 Button("Show Usage Popup") { NotificationCenter.default.post(name: .usageBarTogglePopover, object: nil) }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Analyze Usage & Effort…") { NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil) }
+                Divider()
+                Button("Open Work Log") { NotificationCenter.default.post(name: .usageBarOpenWorkLog, object: nil) }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Copy Today's Work Receipt") { WorkLogState.shared.copyToday() }
             }
         }
     }
@@ -117,10 +122,14 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         NotificationCenter.default.publisher(for: .usageBarOpenSettings)
             .sink { [weak self] _ in self?.openSettings() }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .usageBarOpenWorkLog)
+            .sink { [weak self] _ in self?.openWorkLog() }
+            .store(in: &cancellables)
     }
 
     func popoverWillShow(_ notification: Notification) {
         store.refreshLiveSessions()
+        WorkLogState.shared.scan(ifOlderThan: 60)
         Task { await store.sleepControl.refresh() }
     }
 
@@ -196,6 +205,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         let dashboard = menu.addItem(withTitle: "Open Dashboard", action: #selector(openDashboard), keyEquivalent: "d")
         dashboard.target = self
         dashboard.keyEquivalentModifierMask = [.command, .shift]
+        let workLog = menu.addItem(withTitle: "Open Work Log", action: #selector(openWorkLog), keyEquivalent: "l")
+        workLog.target = self
+        workLog.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(withTitle: "Copy Today's Work Receipt", action: #selector(copyTodayReceipt), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Refresh now", action: #selector(refreshNow), keyEquivalent: "r").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
@@ -219,6 +232,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.performClose(nil)
         DashboardWindowController.shared.show(tab: .analysis)
     }
+    @objc private func openWorkLog() {
+        popover.performClose(nil)
+        DashboardWindowController.shared.show(tab: .workLog)
+    }
+    @objc private func copyTodayReceipt() { WorkLogState.shared.copyToday() }
     @objc private func openSettings() {
         popover.performClose(nil)
         DashboardWindowController.shared.show(tab: .settings)
@@ -231,6 +249,7 @@ extension Notification.Name {
     static let usageBarOpenDashboard = Notification.Name("UsageBarOpenDashboard")
     static let usageBarOpenSettings = Notification.Name("UsageBarOpenSettings")
     static let usageBarOpenAnalysis = Notification.Name("UsageBarOpenAnalysis")
+    static let usageBarOpenWorkLog = Notification.Name("UsageBarOpenWorkLog")
 }
 
 @MainActor
@@ -349,6 +368,7 @@ enum PreviewRenderer {
         let store = UsageStore.shared
         store.loadDemoData()
         store.settings.compactPopover = false
+        if args.contains("--with-worklog") { WorkLogState.shared.loadForPreview() }
         if let i = args.firstIndex(of: "--render-preview"), i + 1 < args.count {
             render(PopoverView().environmentObject(store).environmentObject(store.settings), to: args[i + 1])
         }
@@ -368,6 +388,21 @@ enum PreviewRenderer {
         if let i = args.firstIndex(of: "--render-dashboard"), i + 1 < args.count {
             store.dashboardTab = .overview
             render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660), to: args[i + 1])
+        }
+        if let i = args.firstIndex(of: "--render-worklog"), i + 1 < args.count {
+            // Real local logs: --worklog-range day|week|month, --worklog-date yyyy-MM-dd.
+            WorkLogState.shared.loadForPreview()
+            let range = WorkReceiptCLI.range(args)
+            store.dashboardTab = .workLog
+            let height = min(6000, max(600, WorkReceiptCLI.value("--render-height", args).flatMap(Double.init) ?? 900))
+            render(HStack(spacing: 0) { WorkLogView(range: range) }.environmentObject(store).environmentObject(store.settings)
+                .frame(width: 1060, height: height).background(Theme.bg), to: args[i + 1])
+            if let j = args.firstIndex(of: "--render-receipt"), j + 1 < args.count,
+               let r = WorkLogState.shared.receipt(range), let image = ReceiptImage.render(r, options: WorkLogState.shared.options),
+               let png = ReceiptImage.png(image) {
+                try? png.write(to: URL(fileURLWithPath: args[j + 1]))
+                print("wrote \(args[j + 1])")
+            }
         }
         if let i = args.firstIndex(of: "--render-history"), i + 1 < args.count {
             store.dashboardTab = .history
@@ -430,6 +465,40 @@ enum RevealProbe {
             RunLoop.main.run(until: Date().addingTimeInterval(2))
             print("frontmost now: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
         }
+        exit(0)
+    }
+}
+
+/// `UsageBar --receipt [--date yyyy-MM-dd | --yesterday] [--week | --month] [--markdown | --csv] [--usage] [--no-files] [--no-times]`
+/// prints a work receipt from local agent logs and exits.
+@MainActor
+enum WorkReceiptCLI {
+    static func value(_ name: String, _ args: [String]) -> String? {
+        if let arg = args.first(where: { $0.hasPrefix(name + "=") }) { return String(arg.dropFirst(name.count + 1)) }
+        guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+
+    static func range(_ args: [String]) -> WorkRange {
+        let kind: WorkRange.Kind = args.contains("--week") ? .week : args.contains("--month") ? .month
+            : WorkRange.Kind(rawValue: (value("--worklog-range", args) ?? "").capitalized) ?? .day
+        var date = (value("--date", args) ?? value("--worklog-date", args)).flatMap(Format.day(from:)) ?? Date()
+        if args.contains("--yesterday") { date = Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date }
+        return WorkRange(kind, containing: date)
+    }
+
+    static func runIfRequested() {
+        let args = CommandLine.arguments
+        guard args.contains("--receipt") else { return }
+        let data = WorkLogScanner.scan()
+        let settings = AppSettings.shared
+        let rates = UserDefaults.standard.data(forKey: "analysisModelRates").flatMap { try? JSONDecoder().decode([String: ModelRates].self, from: $0) } ?? [:]
+        let receipt = WorkReceipt.build(data.sessions, range: range(args), hidden: settings.hiddenWorkProjects,
+                                        idleMinutes: settings.workIdleMinutes,
+                                        price: WorkReceipt.pricer(catalog: ModelPriceStore.diskCatalog(), overrides: rates))
+        let format: WorkExportFormat = args.contains("--csv") ? .csv : args.contains("--markdown") ? .markdown : .text
+        let options = WorkExportOptions(files: !args.contains("--no-files"), times: !args.contains("--no-times"), usage: args.contains("--usage"))
+        print(WorkReceiptExport.render(receipt, as: format, options: options))
         exit(0)
     }
 }

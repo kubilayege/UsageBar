@@ -32,6 +32,13 @@ final class AppSettings: ObservableObject {
     @Published var showLiveSessions: Bool { didSet { d.set(showLiveSessions, forKey: "showLiveSessions") } }
     @Published var launchAtLogin: Bool { didSet { d.set(launchAtLogin, forKey: "launchAtLogin"); applyLaunchAtLogin() } }
     @Published var confirmSleepWithTouchID: Bool { didSet { d.set(confirmSleepWithTouchID, forKey: "confirmSleepWithTouchID") } }
+    /// Project roots left out of the work log and its exports.
+    @Published var hiddenWorkProjects: Set<String> { didSet { d.set(hiddenWorkProjects.sorted(), forKey: "hiddenWorkProjects") } }
+    @Published var workIdleMinutes: Int { didSet { d.set(workIdleMinutes, forKey: "workIdleMinutes") } }
+    @Published var workCopyFormat: WorkExportFormat { didSet { d.set(workCopyFormat.rawValue, forKey: "workCopyFormat") } }
+    @Published var workExportFiles: Bool { didSet { d.set(workExportFiles, forKey: "workExportFiles") } }
+    @Published var workExportTimes: Bool { didSet { d.set(workExportTimes, forKey: "workExportTimes") } }
+    @Published var workExportUsage: Bool { didSet { d.set(workExportUsage, forKey: "workExportUsage") } }
 
     init(defaults: UserDefaults = .standard) {
         d = defaults
@@ -48,6 +55,12 @@ final class AppSettings: ObservableObject {
         showLiveSessions = d.object(forKey: "showLiveSessions") as? Bool ?? true
         launchAtLogin = d.bool(forKey: "launchAtLogin")
         confirmSleepWithTouchID = d.object(forKey: "confirmSleepWithTouchID") as? Bool ?? true
+        hiddenWorkProjects = Set(d.stringArray(forKey: "hiddenWorkProjects") ?? [])
+        workIdleMinutes = d.object(forKey: "workIdleMinutes") as? Int ?? 15
+        workCopyFormat = WorkExportFormat(rawValue: d.string(forKey: "workCopyFormat") ?? "") ?? .text
+        workExportFiles = d.object(forKey: "workExportFiles") as? Bool ?? true
+        workExportTimes = d.object(forKey: "workExportTimes") as? Bool ?? true
+        workExportUsage = d.bool(forKey: "workExportUsage")
     }
 
     var orderedEnabledProviders: [ProviderID] {

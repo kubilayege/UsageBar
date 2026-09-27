@@ -83,8 +83,12 @@ final class UsageStore: ObservableObject {
         scheduleRefreshTimer()
         Task { await refreshAll() }
         scanActivity()
+        WorkLogState.shared.scan()
         activityTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.scanActivity() }
+            Task { @MainActor [weak self] in
+                self?.scanActivity()
+                WorkLogState.shared.scan()
+            }
         }
     }
 
