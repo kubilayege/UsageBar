@@ -1,192 +1,243 @@
 import SwiftUI
 
-/// One provider block: header row, one row per window, optional pace and overage rows.
+/// One provider: a header with its verdict, then one meter per window.
 struct ProviderCardView: View {
     @EnvironmentObject var store: UsageStore
     var id: ProviderID
     var compact = false
+    /// Dashboard layout: secondary windows, taller meters and a details footer.
     var expanded = false
 
     private var state: ProviderState { store.state(id) }
     private var snapshot: UsageSnapshot? { state.snapshot }
+    private var labelWidth: CGFloat { expanded ? 58 : 46 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            header
+        VStack(alignment: .leading, spacing: compact ? 5 : 7) {
+            header.padding(.bottom, compact ? 0 : 2)
             if let snap = snapshot {
-                ForEach(snap.primaryWindows) { w in row(w) }
-                if expanded { ForEach(snap.secondaryWindows) { w in row(w) } }
-                if !compact, let pace = snap.paceWindow {
-                    if let projected = pace.projectedPercent(now: store.now) {
-                        paceRow(projected, window: pace)
-                    } else if expanded {
-                        message("Pace: too early in the \(pace.label) window to project.", icon: "clock", color: Theme.textMuted)
-                    }
-                }
+                ForEach(snap.primaryWindows) { row($0) }
+                if expanded { ForEach(snap.secondaryWindows) { row($0) } }
                 if let extra = snap.extraUsage { extraRow(extra) }
-                if let resets = snap.bankedResets {
-                    HStack {
-                        Label("Banked resets", systemImage: "arrow.counterclockwise")
-                        Spacer()
-                        Text("\(resets.available)").monospacedDigit().fontWeight(.semibold)
-                        if let applicable = resets.applicable {
-                            Text("· \(applicable) applicable now").foregroundStyle(Theme.textMuted)
-                        }
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textSecondary)
-                    .help("Reset credits reported by Codex. Applicable counts depend on the current limit. No resets are used by UsageBar.")
-                }
+                if let resets = snap.bankedResets { bankedRow(resets) }
                 if expanded { footer(snap) }
             }
-            if let msg = state.errorMessage {
-                message(msg, icon: "exclamationmark.triangle.fill", color: Theme.caution)
-            } else if case .cooldown(let until, let stale) = state, expanded || stale == nil {
-                message("Rate-limited by the API · retrying in \(Format.countdown(to: until, from: store.now) ?? "a moment")", icon: "clock", color: Theme.textMuted)
-            } else if case .notConfigured(let msg) = state {
-                message(msg, icon: "person.crop.circle.badge.questionmark", color: Theme.textMuted)
-            } else if case .loading(nil) = state {
-                message("Loading…", icon: "hourglass", color: Theme.textMuted)
-            } else if case .idle = state {
-                message("Waiting for first refresh…", icon: "hourglass", color: Theme.textMuted)
-            }
+            stateMessage
         }
     }
 
-    // MARK: Pieces
+    // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 8) {
-            ProviderDot(id: id)
+        HStack(spacing: 7) {
             Text(id.displayName)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .font(.system(size: expanded ? 15 : 13.5, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text(headerSubtitle)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-            if id.isExperimental { Badge(text: "beta", color: Theme.textMuted) }
-            Spacer()
-            if state.isLoading {
-                ProgressView().controlSize(.mini)
+            if let plan = snapshot?.planName {
+                Text(plan).font(.system(size: 12)).foregroundStyle(Theme.textMuted).lineLimit(1)
             }
+            if id.isExperimental { Badge(text: "beta", color: Theme.textMuted) }
+            Spacer(minLength: 6)
+            if state.isLoading { ProgressView().controlSize(.mini) }
             if let snap = snapshot {
-                let limited = snap.windows.filter(\.hasLimit)
-                Text(limited.isEmpty ? (expanded ? "Tracking" : (snap.planName.map { "\($0) plan" } ?? "Tracking")) : snap.worstSeverity.label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(limited.isEmpty ? Theme.textSecondary : snap.worstSeverity.color)
+                let status = ProviderStatus.of(snap, now: store.now)
+                Text(status.text)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(status.color)
+                    .lineLimit(1)
             }
         }
     }
 
-    private var headerSubtitle: String {
-        guard let snap = snapshot else { return id.windowSummary }
-        if expanded, let plan = snap.planName { return plan }
-        let labels = snap.primaryWindows.map(\.label)
-        return labels.isEmpty ? id.windowSummary : labels.joined(separator: " · ")
+    // MARK: Rows
+
+    @ViewBuilder private func row(_ w: UsageWindow) -> some View {
+        Group {
+            if expanded && w.hasLimit { stackedRow(w) } else { inlineRow(w) }
+        }
+        .help(help(w))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(id.displayName) \(w.label)")
+        .accessibilityValue(help(w))
     }
 
-    private func row(_ w: UsageWindow) -> some View {
+    /// Popup: label, meter, percent and countdown on one line.
+    private func inlineRow(_ w: UsageWindow) -> some View {
         HStack(spacing: 10) {
             Text(w.label)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
             if w.hasLimit {
-                UsageBarView(percent: w.percent, color: w.severity.color)
+                WindowMeter(percent: w.percent, color: w.severity.color,
+                            elapsed: compact ? nil : w.elapsedFraction(now: store.now),
+                            projected: compact ? nil : w.projection(now: store.now))
                 Text(Format.percent(w.percent))
-                    .font(Theme.numberFont)
+                    .font(Theme.readout(14))
                     .foregroundStyle(w.severity.color)
-                    .frame(width: 48, alignment: .trailing)
+                    .frame(width: 44, alignment: .trailing)
+                Text(resetText(w))
+                    .font(.system(size: 11.5).monospacedDigit())
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .frame(width: 74, alignment: .trailing)
             } else {
                 Text(w.detail ?? "—")
-                    .font(Theme.smallNumberFont)
+                    .font(Theme.mono(11.5, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            Text(rightText(w))
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-                .frame(width: 86, alignment: .trailing)
-                .help(w.resetsAt.map { "Resets \(Format.dateTime($0))" } ?? "")
         }
     }
 
-    private func rightText(_ w: UsageWindow) -> String {
-        if w.hasLimit, let detail = w.detail, w.resetsAt == nil { return detail }
-        return Format.countdown(to: w.resetsAt, from: store.now) ?? (w.hasLimit ? "" : "")
+    /// Dashboard: the numbers sit above a full-width meter.
+    private func stackedRow(_ w: UsageWindow) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(w.label).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                Text(Format.percent(w.percent)).font(Theme.readout(17)).foregroundStyle(w.severity.color)
+                Spacer(minLength: 8)
+                Text(paceText(w)).font(.system(size: 11.5)).foregroundStyle(paceColor(w)).lineLimit(1)
+                if let reset = w.resetsAt {
+                    Text("resets in \(Format.span(reset.timeIntervalSince(store.now)))")
+                        .font(.system(size: 11.5).monospacedDigit()).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                } else if let detail = w.detail {
+                    Text(detail).font(Theme.mono(11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                }
+            }
+            WindowMeter(percent: w.percent, color: w.severity.color,
+                        elapsed: w.elapsedFraction(now: store.now), projected: w.projection(now: store.now), height: 10)
+        }
+        .padding(.bottom, 4)
     }
 
-    private func paceRow(_ projected: Double, window: UsageWindow) -> some View {
-        let verdict = PaceVerdict.from(projected: projected)
-        return HStack(spacing: 10) {
-            Text("Pace")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .frame(width: 62, alignment: .leading)
-            UsageBarView(percent: projected, color: verdict.color)
-            Text(Format.percent(projected))
-                .font(Theme.numberFont)
-                .foregroundStyle(verdict.color)
-                .frame(width: 48, alignment: .trailing)
-            Text(expanded ? verdict.rawValue : "projected")
-                .font(.system(size: 13))
-                .foregroundStyle(expanded ? verdict.color : Theme.textSecondary)
-                .frame(width: 86, alignment: .trailing)
-                .help("Projected \(window.label) usage at reset if the current rate continues")
+    private func paceText(_ w: UsageWindow) -> String {
+        if w.percent >= 100 { return "" }
+        if let out = w.exhaustion(now: store.now) { return "out in \(Format.span(out.timeIntervalSince(store.now))) ·" }
+        if let p = w.projection(now: store.now) { return "ends near \(Format.percent(p)) ·" }
+        return ""
+    }
+
+    private func paceColor(_ w: UsageWindow) -> Color {
+        if let out = w.exhaustion(now: store.now) { return out.timeIntervalSince(store.now) < 3600 ? Theme.critical : Theme.warning }
+        return Theme.textMuted
+    }
+
+    private func resetText(_ w: UsageWindow) -> String {
+        if let detail = w.detail, w.resetsAt == nil { return detail }
+        guard let reset = w.resetsAt else { return "" }
+        return Format.span(reset.timeIntervalSince(store.now))
+    }
+
+    private func help(_ w: UsageWindow) -> String {
+        guard w.hasLimit else { return w.detail ?? w.label }
+        var parts = ["\(Format.percent(w.percent)) of the \(w.label) limit used."]
+        if let e = w.elapsedFraction(now: store.now) { parts.append("\(Format.percent(e * 100)) of the window has passed.") }
+        if let out = w.exhaustion(now: store.now) {
+            parts.append("At this pace it runs out in \(Format.span(out.timeIntervalSince(store.now))), at \(Format.clock(out)).")
+        } else if let p = w.projection(now: store.now) {
+            parts.append("At this pace it ends near \(Format.percent(p)).")
+        }
+        if let reset = w.resetsAt { parts.append("Resets \(Format.dateTime(reset)).") }
+        return parts.joined(separator: " ")
+    }
+
+    @ViewBuilder private func extraRow(_ extra: ExtraUsage) -> some View {
+        if expanded, let pct = extra.percent {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(extra.title).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                    Text(Format.percent(pct)).font(Theme.readout(17)).foregroundStyle(Severity.from(percent: pct).color)
+                    Spacer(minLength: 8)
+                    Text(extra.detail).font(Theme.mono(11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                }
+                WindowMeter(percent: pct, color: Severity.from(percent: pct).color, height: 10)
+            }
+            .padding(.bottom, 4)
+            .help("Extra usage beyond the plan: \(extra.detail)")
+        } else {
+            inlineExtraRow(extra)
         }
     }
 
-    private func extraRow(_ extra: ExtraUsage) -> some View {
+    private func inlineExtraRow(_ extra: ExtraUsage) -> some View {
         HStack(spacing: 10) {
             Text(extra.title)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
-                .frame(width: 62, alignment: .leading)
+                .frame(width: labelWidth, alignment: .leading)
             if let pct = extra.percent {
-                UsageBarView(percent: pct, color: Severity.from(percent: pct).color)
+                WindowMeter(percent: pct, color: Severity.from(percent: pct).color)
                 Text(Format.percent(pct))
-                    .font(Theme.numberFont)
+                    .font(Theme.readout(14))
                     .foregroundStyle(Severity.from(percent: pct).color)
-                    .frame(width: 48, alignment: .trailing)
+                    .frame(width: 44, alignment: .trailing)
             } else {
                 Spacer(minLength: 0)
             }
             Text(extra.detail)
-                .font(Theme.smallNumberFont)
+                .font(Theme.mono(11))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
-                .frame(width: extra.percent == nil ? nil : 86, alignment: .trailing)
+                .frame(width: extra.percent == nil ? nil : 74, alignment: .trailing)
         }
+        .help("Extra usage beyond the plan: \(extra.detail)")
+    }
+
+    private func bankedRow(_ resets: BankedResets) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.counterclockwise").font(.system(size: 10.5, weight: .semibold))
+            Text("\(resets.available) banked \(resets.available == 1 ? "reset" : "resets")")
+            if let applicable = resets.applicable {
+                Text("· \(applicable) usable now").foregroundStyle(Theme.textMuted)
+            }
+        }
+        .font(.system(size: 11.5))
+        .foregroundStyle(Theme.textSecondary)
+        .padding(.leading, expanded ? 0 : labelWidth + 10)
+        .help("Reset credits reported by Codex. Usable counts depend on the current limit. UsageBar never spends them.")
     }
 
     private func footer(_ snap: UsageSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let acct = snap.accountLabel {
-                Text(acct).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(1)
+        HStack(spacing: 6) {
+            if let reset = snap.primaryWindows.compactMap(\.resetsAt).min() {
+                Text("Next reset \(Format.dateTime(reset))")
             }
-            HStack(spacing: 6) {
-                if let reset = snap.primaryWindows.compactMap(\.resetsAt).min() {
-                    Text("Next reset \(Format.dateTime(reset))")
-                }
-                if let note = snap.note { Text("· \(note)") }
-                Spacer()
-                Text("Updated \(Format.relative(snap.fetchedAt, now: store.now))")
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.textMuted)
+            if let note = snap.note { Text("· \(note)") }
+            Spacer(minLength: 8)
+            if let acct = snap.accountLabel { Text(acct).lineLimit(1).truncationMode(.middle) ; Text("·") }
+            Text("Updated \(Format.relative(snap.fetchedAt, now: store.now))")
         }
-        .padding(.top, 2)
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.textMuted)
+        .lineLimit(1)
+        .padding(.top, 4)
+    }
+
+    // MARK: States
+
+    @ViewBuilder private var stateMessage: some View {
+        if let msg = state.errorMessage {
+            message(msg, icon: "exclamationmark.triangle.fill", color: Theme.caution)
+        } else if case .cooldown(let until, let stale) = state, expanded || stale == nil {
+            message("The API asked UsageBar to slow down. Retrying in \(Format.countdown(to: until, from: store.now) ?? "a moment").",
+                    icon: "clock", color: Theme.textMuted)
+        } else if case .notConfigured(let msg) = state {
+            message(msg, icon: "person.crop.circle.badge.questionmark", color: Theme.textMuted)
+        } else if case .loading(nil) = state {
+            message("Loading…", icon: "hourglass", color: Theme.textMuted)
+        } else if case .idle = state {
+            message("Waiting for the first refresh…", icon: "hourglass", color: Theme.textMuted)
+        }
     }
 
     private func message(_ text: String, icon: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 6) {
-            Image(systemName: icon).font(.system(size: 11))
-            Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            Image(systemName: icon).font(.system(size: 10.5))
+            Text(text).font(.system(size: 11.5)).fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(color)
     }

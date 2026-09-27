@@ -65,10 +65,10 @@ struct UsageCostChart: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Estimated API cost per turn").font(.system(size: 15, weight: .semibold))
+                    Text("Estimated API cost per turn").font(.system(size: 14, weight: .semibold))
                     Text(resolution == .average
-                         ? "\(plot.isHourly ? "Hourly" : "Daily") mean per model and effort. Larger marks carry more turns."
-                         : "One mark per recorded assistant response, including tool-use responses.")
+                         ? "\(plot.isHourly ? "Hourly" : "Daily") mean per model and effort. Larger marks carry more turns. Hover to compare."
+                         : "One mark per recorded assistant response, including tool-use responses. Hover for details.")
                         .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                 }
                 Spacer(minLength: 12)
@@ -89,13 +89,21 @@ struct UsageCostChart: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 200, alignment: .center)
             } else {
+                legendView
                 CostChartCanvas(points: plot.points, labels: labels, legend: legend, colors: colors, symbols: symbols,
                                 focus: activeFocus, resolution: resolution, start: start, end: end, ceiling: ceiling,
-                                isHourly: plot.isHourly, height: singleModel ? 250 : 280, onHover: hovered)
+                                isHourly: plot.isHourly, height: singleModel ? 280 : 320, onHover: hovered)
                     .equatable()
-                    .overlay { selectionLayer.allowsHitTesting(false) }
-                legendView
-                inspection
+                    .overlay {
+                        GeometryReader { geo in
+                            ZStack(alignment: .topLeading) {
+                                Color.clear
+                                selectionLayer
+                                tooltipLayer(in: geo.size)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                    }
             }
             if plot.omittedTurns > 0 {
                 HStack(spacing: 6) {
@@ -106,8 +114,7 @@ struct UsageCostChart: View {
                 .font(.system(size: 11)).foregroundStyle(Theme.caution)
             }
         }
-        .padding(18).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .padding(18).panel()
         .onChange(of: resolution) { _, _ in hover = nil }
         .onChange(of: start) { _, _ in hover = nil }
         .onChange(of: end) { _, _ in hover = nil }
@@ -185,19 +192,115 @@ struct UsageCostChart: View {
 
     /// Selection indicator drawn with plain shapes; both scales are linear so no chart proxy is needed.
     @ViewBuilder private var selectionLayer: some View {
-        if let hover, let point = selected, let cost = point.row.costPerTurn {
+        if let hover, let point = selected, let at = position(point, in: hover.plotFrame) {
             let frame = hover.plotFrame
-            let x = frame.minX + point.timestamp.timeIntervalSince(start) / max(1, end.timeIntervalSince(start)) * frame.width
-            let y = frame.maxY - cost / ceiling * frame.height
             Path { path in
-                path.move(to: CGPoint(x: x, y: frame.minY))
-                path.addLine(to: CGPoint(x: x, y: frame.maxY))
+                path.move(to: CGPoint(x: at.x, y: frame.minY))
+                path.addLine(to: CGPoint(x: at.x, y: frame.maxY))
             }
             .stroke(Theme.textMuted.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+            ForEach(siblings(of: point).filter { $0.id != point.id }) { other in
+                if let p = position(other, in: frame) {
+                    Circle().stroke(EffortStyle.color(other.row.effort).opacity(0.9), lineWidth: 1.5)
+                        .frame(width: 11, height: 11).position(p)
+                }
+            }
             Circle().fill(EffortStyle.color(point.row.effort)).frame(width: 12, height: 12)
-                .overlay(Circle().stroke(Theme.bg, lineWidth: 2.5))
-                .position(x: x, y: y)
+                .overlay(Circle().stroke(Theme.panel, lineWidth: 2.5))
+                .position(at)
         }
+    }
+
+    private func position(_ point: AnalysisCostPoint, in frame: CGRect) -> CGPoint? {
+        guard let cost = point.row.costPerTurn else { return nil }
+        let x = frame.minX + point.timestamp.timeIntervalSince(start) / max(1, end.timeIntervalSince(start)) * frame.width
+        return CGPoint(x: x, y: frame.maxY - cost / ceiling * frame.height)
+    }
+
+    /// Every visible mark in the hovered point's period, most expensive first. Each turn stands alone.
+    private func siblings(of point: AnalysisCostPoint) -> [AnalysisCostPoint] {
+        guard resolution == .average else { return [point] }
+        return plot.points
+            .filter { $0.start == point.start && (activeFocus.isEmpty || activeFocus.contains($0.row.id)) }
+            .sorted { ($0.row.costPerTurn ?? 0) > ($1.row.costPerTurn ?? 0) }
+    }
+
+    // MARK: Tooltip
+
+    /// Floats beside the hovered mark, flipping sides so it stays inside the plot.
+    @ViewBuilder private func tooltipLayer(in size: CGSize) -> some View {
+        if let hover, let point = selected, let at = position(point, in: hover.plotFrame) {
+            let flip = at.x > size.width / 2
+            tooltip(point)
+                .alignmentGuide(.leading) { d in flip ? -(at.x - 16 - d.width) : -(at.x + 16) }
+                .alignmentGuide(.top) { d in
+                    let frame = hover.plotFrame
+                    return -min(max(frame.minY + 2, at.y - d.height / 2), max(frame.minY + 2, frame.maxY - d.height - 2))
+                }
+        }
+    }
+
+    private func tooltip(_ point: AnalysisCostPoint) -> some View {
+        let row = point.row
+        let others = siblings(of: point)
+        let input = row.input + row.cached + row.cacheWrite
+        let cached = input > 0 ? String(format: "%.0f%%", 100 * Double(row.cached) / Double(input)) : "—"
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(period(point)).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
+            if others.count > 1 {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(others.prefix(8)) { other in
+                        let current = other.id == point.id
+                        HStack(spacing: 6) {
+                            (symbols[other.row.id] ?? .circle).path(in: CGRect(x: 0, y: 0, width: 7, height: 7))
+                                .fill(EffortStyle.color(other.row.effort)).frame(width: 7, height: 7)
+                            Text(labels[other.row.id] ?? other.row.model)
+                                .font(.system(size: 11, weight: current ? .semibold : .regular))
+                                .foregroundStyle(current ? Theme.textPrimary : Theme.textSecondary)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 10)
+                            Text(money(other.row.costPerTurn))
+                                .font(.system(size: 11, weight: current ? .semibold : .regular, design: .monospaced))
+                                .foregroundStyle(current ? Theme.textPrimary : Theme.textSecondary)
+                        }
+                        .padding(.vertical, 1).padding(.horizontal, 5)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(current ? Color.white.opacity(0.07) : .clear))
+                    }
+                    if others.count > 8 {
+                        Text("+\(others.count - 8) more").font(.system(size: 10.5)).foregroundStyle(Theme.textMuted).padding(.leading, 5)
+                    }
+                }
+                Rectangle().fill(Theme.line).frame(height: 1)
+            }
+            HStack(spacing: 6) {
+                ProviderDot(id: row.provider, size: 6)
+                Text(row.model).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textPrimary).lineLimit(1)
+                EffortPill(effort: row.effort)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(money(row.costPerTurn)).font(Theme.readout(22)).foregroundStyle(Theme.textPrimary)
+                Text("per turn").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                Spacer(minLength: 8)
+                Text("\(row.turns) \(row.turns == 1 ? "turn" : "turns")").font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(row.turns < 5 && resolution == .average ? Theme.caution : Theme.textSecondary)
+                    .help(row.turns < 5 ? "Fewer than 5 turns: too few to compare" : "")
+            }
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 3) {
+                GridRow {
+                    stat(Format.tokens(Int(row.tokensPerTurn)), "tokens / turn")
+                    stat(cached, "input cached")
+                }
+                GridRow {
+                    stat(Format.tokens(row.input / max(1, row.turns)), "uncached in")
+                    stat(Format.tokens(row.output / max(1, row.turns)), "out")
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 272, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
     }
 
     private func hovered(_ input: CostChartHoverInput?) {
@@ -207,44 +310,10 @@ struct UsageCostChart: View {
         if next != hover { hover = next }
     }
 
-    private var inspection: some View {
-        Group {
-            if let point = selected {
-                let row = point.row
-                let input = row.input + row.cached + row.cacheWrite
-                let cached = input > 0 ? String(format: "%.0f%%", 100 * Double(row.cached) / Double(input)) : "—"
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    HStack(spacing: 6) {
-                        ProviderDot(id: row.provider, size: 6)
-                        Text(row.model).font(.system(size: 12, weight: .semibold))
-                        EffortPill(effort: row.effort)
-                    }
-                    Text(period(point)).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
-                    Spacer()
-                    stat(money(row.costPerTurn), "per turn", strong: true)
-                    stat("\(row.turns)", row.turns == 1 ? "turn" : "turns", tint: row.turns < 5 && resolution == .average ? Theme.caution : nil)
-                    stat(Format.tokens(Int(row.tokensPerTurn)), "tokens / turn")
-                    stat(Format.tokens(row.input / max(1, row.turns)), "uncached in")
-                    stat(Format.tokens(row.output / max(1, row.turns)), "out")
-                    stat(cached, "cached")
-                }
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "cursorarrow.motionlines").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                    Text("Hover the plot to compare efforts at a point in time.").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(selected == nil ? 0.02 : 0.04)))
-    }
-
-    private func stat(_ value: String, _ label: String, strong: Bool = false, tint: Color? = nil) -> some View {
+    private func stat(_ value: String, _ label: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(value).font(.system(size: strong ? 13 : 12, weight: strong ? .bold : .semibold, design: .monospaced))
-                .foregroundStyle(tint ?? Theme.textPrimary)
-            Text(label).font(.system(size: 10)).foregroundStyle(Theme.textMuted)
+            Text(value).font(.system(size: 11.5, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.textPrimary)
+            Text(label).font(.system(size: 10.5)).foregroundStyle(Theme.textMuted)
         }
     }
 
@@ -261,11 +330,12 @@ struct UsageCostChart: View {
 
     static func color(_ row: AnalysisRow) -> Color { EffortStyle.color(row.effort) }
 
+    /// "Wed 23 Sep" for a daily mean, "Sun 27 Sep, 14:00–15:00" for an hourly one, the exact time for a turn.
     private func period(_ point: AnalysisCostPoint) -> String {
         if resolution == .turns { return Format.dateTime(point.timestamp) }
-        let from = point.start.formatted(.dateTime.month(.abbreviated).day().hour().minute())
-        let to = point.end.formatted(.dateTime.month(.abbreviated).day().hour().minute())
-        return "\(from) – \(to)"
+        let day = WorkRange.format("EEE d MMM", point.start)
+        guard plot.isHourly else { return day }
+        return "\(day), \(WorkRange.format("HH:mm", point.start))–\(WorkRange.format("HH:mm", point.end))"
     }
     private func money(_ value: Double?) -> String { value.map { String(format: "$%.4f", $0) } ?? "—" }
 }
@@ -356,6 +426,13 @@ private struct CostChartCanvas: View, Equatable {
         .chartOverlay { proxy in
             GeometryReader { geometry in
                 Rectangle().fill(.clear).contentShape(Rectangle())
+                    .onAppear {
+                        guard RenderFlags.isRendering, let requested = RenderFlags.previewHoverIndex else { return }
+                        let index = requested < 0 ? points.count + requested : requested
+                        guard points.indices.contains(index),
+                              let cost = points[index].row.costPerTurn, let anchor = proxy.plotFrame else { return }
+                        onHover(CostChartHoverInput(date: points[index].timestamp, cost: cost, plotFrame: geometry[anchor]))
+                    }
                     .onContinuousHover { phase in
                         guard case .active(let location) = phase, let anchor = proxy.plotFrame else { onHover(nil); return }
                         let frame = geometry[anchor]

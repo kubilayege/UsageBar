@@ -6,7 +6,7 @@ enum DashboardTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var icon: String {
         switch self {
-        case .overview: return "square.grid.2x2"
+        case .overview: return "gauge.with.dots.needle.33percent"
         case .workLog: return "receipt"
         case .history: return "chart.xyaxis.line"
         case .analysis: return "chart.bar.xaxis"
@@ -40,8 +40,8 @@ struct DashboardView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar.frame(width: 210)
-            Rectangle().fill(Theme.divider).frame(width: 1)
+            sidebar.frame(width: 204).background(Theme.sidebar)
+            Rectangle().fill(Theme.line).frame(width: 1)
             Group {
                 switch store.dashboardTab {
                 case .overview: OverviewTab()
@@ -59,68 +59,73 @@ struct DashboardView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                AppLogoView(size: 36)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("UsageBar").font(.system(size: 15, weight: .bold, design: .rounded)).foregroundStyle(Theme.textPrimary)
-                    Text("Dashboard").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                }
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 9) {
+                AppLogoView(size: 26)
+                Text("UsageBar").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.textPrimary)
             }
-            .padding(.bottom, 14)
-            .padding(.top, 22)
+            .padding(.leading, 6)
+            .padding(.top, 40)
+            .padding(.bottom, 18)
 
             ForEach(DashboardTab.allCases) { t in
+                let selected = store.dashboardTab == t
                 Button { store.dashboardTab = t } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 9) {
                         Image(systemName: t.icon).font(.system(size: 12)).frame(width: 16)
-                        Text(t.rawValue).font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(selected ? Theme.textPrimary : Theme.textMuted)
+                        Text(t.rawValue).font(.system(size: 13, weight: selected ? .semibold : .regular))
                         Spacer()
                     }
-                    .foregroundStyle(store.dashboardTab == t ? Theme.textPrimary : Theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 40)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(store.dashboardTab == t ? Theme.chipSelected : .clear))
+                    .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 32)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Theme.chipSelected : .clear))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityAddTraits(store.dashboardTab == t ? .isSelected : [])
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
 
-            Text("PROVIDERS").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.textMuted).padding(.top, 16).padding(.leading, 10)
+            Legend("Providers").padding(.top, 22).padding(.bottom, 6).padding(.leading, 8)
             ForEach(settings.orderedEnabledProviders) { id in
+                let status = providerStatus(id)
                 HStack(spacing: 8) {
-                    ProviderDot(id: id, size: 8)
-                    Text(id.displayName).font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-                    Spacer()
-                    if let snap = store.snapshot(id) {
-                        let limited = snap.windows.filter(\.hasLimit)
-                        if !limited.isEmpty {
-                            Circle().fill(snap.worstSeverity.color).frame(width: 7, height: 7)
-                        }
-                    } else if case .notConfigured = store.state(id) {
-                        Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(Theme.textMuted)
-                    } else if store.state(id).errorMessage != nil {
-                        Image(systemName: "exclamationmark.triangle").font(.system(size: 10)).foregroundStyle(Theme.caution)
-                    }
+                    ProviderDot(id: id, size: 6)
+                    Text(id.displayName).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(status.text).font(.system(size: 11, weight: .medium)).foregroundStyle(status.color).lineLimit(1)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 4)
+                .padding(.horizontal, 8).frame(height: 26)
+                .contentShape(Rectangle())
+                .onTapGesture { store.dashboardTab = .overview }
             }
 
             Spacer()
             Button { Task { await store.refreshAll(force: true) } } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 11, weight: .semibold))
+                    if store.isRefreshing { ProgressView().controlSize(.mini) }
+                    else { Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold)) }
                     Text(store.isRefreshing ? "Refreshing…" : "Refresh all").font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(ChipButtonStyle())
+            .disabled(store.isRefreshing)
             Text("Updated \(Format.relative(store.lastRefresh, now: store.now))")
-                .font(.system(size: 10)).foregroundStyle(Theme.textMuted).padding(.leading, 2)
+                .font(.system(size: 10.5)).foregroundStyle(Theme.textMuted)
+                .frame(maxWidth: .infinity).padding(.top, 4)
         }
-        .padding(16)
+        .padding(.horizontal, 12).padding(.bottom, 14)
+    }
+
+    private func providerStatus(_ id: ProviderID) -> (text: String, color: Color) {
+        let state = store.state(id)
+        if let snap = state.snapshot { return ProviderStatus.of(snap, now: store.now) }
+        if case .notConfigured = state { return ("Not set up", Theme.textMuted) }
+        if state.errorMessage != nil { return ("Error", Theme.caution) }
+        return ("…", Theme.textMuted)
     }
 }
 
@@ -132,98 +137,98 @@ struct OverviewTab: View {
 
     var body: some View {
         MaybeScroll {
-            VStack(alignment: .leading, spacing: 16) {
-                paceStrip
-                let ids = settings.orderedEnabledProviders
-                VStack(spacing: 14) {
-                    ForEach(Array(stride(from: 0, to: ids.count, by: 2)), id: \.self) { i in
-                        HStack(alignment: .top, spacing: 14) {
-                            Card { ProviderCardView(id: ids[i], expanded: true) }.frame(maxWidth: .infinity)
-                            if i + 1 < ids.count {
-                                Card { ProviderCardView(id: ids[i + 1], expanded: true) }.frame(maxWidth: .infinity)
-                            } else {
-                                Color.clear.frame(maxWidth: .infinity)
-                            }
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 18) {
+                PageHeader(title: "Overview",
+                           subtitle: "Updated \(Format.relative(store.lastRefresh, now: store.now)) · refreshes every \(Format.interval(settings.refreshInterval))")
+                runway
+                providerGrid
+                HStack(alignment: .top, spacing: 14) {
+                    liveSessions.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(16).panel()
+                    serviceHealth.frame(width: 260).frame(maxHeight: .infinity, alignment: .topLeading).padding(16).panel()
                 }
-                liveSessions
-                serviceHealth
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 20)
+            .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
         }
     }
 
-    private var paceStrip: some View {
-        let items: [(ProviderID, UsageWindow, Double)] = settings.orderedEnabledProviders.compactMap { id in
-            guard let w = store.snapshot(id)?.paceWindow, let proj = w.projectedPercent(now: store.now) else { return nil }
-            return (id, w, proj)
+    @ViewBuilder private var runway: some View {
+        let r = Runway(settings.orderedEnabledProviders.compactMap { id in store.snapshot(id).map { (id, $0) } }, now: store.now)
+        if r.lead != nil {
+            RunwayView(runway: r, now: store.now, size: .dashboard)
+                .padding(.horizontal, 22).padding(.vertical, 20)
+                .panel(radius: 12)
         }
-        return Group {
-            if !items.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Will you make it to the reset?").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                    HStack(spacing: 10) {
-                        ForEach(items, id: \.0) { id, w, proj in
-                            let verdict = PaceVerdict.from(projected: proj)
-                            Card(padding: 12) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    HStack(spacing: 6) {
-                                        ProviderDot(id: id, size: 8)
-                                        Text("\(id.displayName) \(w.label)").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
-                                        Spacer()
-                                        Badge(text: verdict.rawValue, color: verdict.color)
-                                    }
-                                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                        Text(Format.percent(proj)).font(.system(size: 20, weight: .bold, design: .monospaced)).foregroundStyle(verdict.color)
-                                        Text("projected · \(Format.percent(w.percent)) now").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                                    }
-                                    if let c = Format.countdown(to: w.resetsAt, from: store.now) {
-                                        Text("resets in \(c)").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
+    }
+
+    private var providerGrid: some View {
+        let ids = settings.orderedEnabledProviders
+        return VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(stride(from: 0, to: ids.count, by: 2)), id: \.self) { i in
+                HStack(alignment: .top, spacing: 14) {
+                    providerPanel(ids[i])
+                    if i + 1 < ids.count { providerPanel(ids[i + 1]) } else { Color.clear.frame(maxWidth: .infinity) }
                 }
+                .fixedSize(horizontal: false, vertical: true)
             }
+            if !ids.isEmpty { MeterKey().padding(.leading, 2) }
         }
+    }
+
+    private func providerPanel(_ id: ProviderID) -> some View {
+        ProviderCardView(id: id, expanded: true)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(16)
+            .panel()
+            .contextMenu {
+                Button("Refresh \(id.displayName)") { Task { await store.refresh(id) } }
+            }
     }
 
     private var liveSessions: some View {
         let sessions = store.liveSessions.filter { settings.enabledProviders.contains($0.provider) }
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("Live sessions").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                Text("agent sessions active in the last 10 minutes").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Legend("Live sessions")
+                Spacer()
+                Text("active in the last 10 minutes").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
             }
+            .padding(.bottom, 2)
             if sessions.isEmpty {
-                Text("None right now.").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                Text("No agent sessions right now. They appear here as Claude Code, Codex or OpenCode write to their logs.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                VStack(spacing: 6) { ForEach(sessions) { s in LiveSessionRow(session: s, now: store.now) } }
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { i, s in
+                    if i > 0 { Rectangle().fill(Theme.line).frame(height: 1) }
+                    LiveSessionRow(session: s, now: store.now)
+                }
             }
         }
     }
 
     private var serviceHealth: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Service health").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-            HStack(spacing: 10) {
-                ForEach(store.serviceStatuses) { s in
-                    Button { NSWorkspace.shared.open(s.service.pageURL) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: s.isOperational ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(s.color)
-                            Text(s.service.label).foregroundStyle(Theme.textSecondary)
-                            Text(s.description).foregroundStyle(s.color).fontWeight(.semibold)
+            Legend("Service status").padding(.bottom, 2)
+            if store.serviceStatuses.isEmpty {
+                Text("Status pages haven't loaded yet.").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+            }
+            ForEach(store.serviceStatuses) { s in
+                Button { NSWorkspace.shared.open(s.service.pageURL) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(s.color).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(s.service.label).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.textPrimary)
+                            Text(s.description).font(.system(size: 11)).foregroundStyle(s.isOperational ? Theme.textMuted : s.color)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .font(.system(size: 12))
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.forward").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.textMuted)
                     }
-                    .buttonStyle(ChipButtonStyle())
+                    .contentShape(Rectangle())
                 }
-                if store.serviceStatuses.isEmpty {
-                    Text("Status pages not loaded yet.").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
-                }
+                .buttonStyle(.plain)
+                .help("Open the \(s.service.label) status page")
             }
         }
     }
@@ -243,20 +248,15 @@ struct HistoryTab: View {
     var body: some View {
         MaybeScroll {
             VStack(alignment: .leading, spacing: 18) {
-                HStack {
+                PageHeader(title: "History", subtitle: "Limits recorded while UsageBar runs, and activity from local session logs.") {
                     Picker("", selection: $range) { ForEach(HistoryRange.allCases) { Text($0.rawValue).tag($0) } }
-                        .pickerStyle(.segmented).frame(width: 240)
-                    Spacer()
-                    Picker("", selection: $provider) {
-                        ForEach(settings.orderedEnabledProviders) { Text($0.displayName).tag($0) }
-                    }
-                    .frame(width: 150)
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 210)
                 }
                 trendSection
                 statsSection
                 heatmapSection
             }
-            .padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 20)
+            .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
         }
         .onAppear { if !settings.enabledProviders.contains(provider), let f = settings.orderedEnabledProviders.first { provider = f } }
     }
@@ -264,39 +264,51 @@ struct HistoryTab: View {
     // Trend of limit usage from the local history log.
     private var trendSection: some View {
         let points = store.history.series(provider: provider, since: since)
+        let windows = Array(NSOrderedSet(array: points.map(\.w))) as? [String] ?? []
         return Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("\(provider.displayName) limit usage").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Legend("Limit usage")
                     Spacer()
-                    Text("last \(range.rawValue.lowercased())").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                    ForEach(Array(windows.enumerated()), id: \.element) { i, w in
+                        HStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 1).fill(Self.windowColor(i, provider)).frame(width: 10, height: 3)
+                            Text(w).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    Picker("", selection: $provider) {
+                        ForEach(settings.orderedEnabledProviders) { Text($0.displayName).tag($0) }
+                    }
+                    .labelsHidden().frame(width: 130)
                 }
                 if points.count < 2 {
                     Text("History builds up while UsageBar runs. Check back after a few refreshes.")
                         .font(.system(size: 12)).foregroundStyle(Theme.textMuted)
-                        .frame(height: 180).frame(maxWidth: .infinity)
+                        .frame(height: 200).frame(maxWidth: .infinity)
                 } else {
                     Chart(points) { p in
-                        LineMark(x: .value("Time", p.t), y: .value("Used", p.pct))
+                        LineMark(x: .value("Time", p.t), y: .value("Used", min(100, p.pct)))
                             .foregroundStyle(by: .value("Window", p.w))
-                            .interpolationMethod(.monotone)
-                            .lineStyle(StrokeStyle(lineWidth: 2))
-                        AreaMark(x: .value("Time", p.t), y: .value("Used", p.pct))
-                            .foregroundStyle(by: .value("Window", p.w))
-                            .opacity(0.08)
-                            .interpolationMethod(.monotone)
+                            .interpolationMethod(.stepEnd)
+                            .lineStyle(StrokeStyle(lineWidth: 1.75))
                     }
+                    .chartForegroundStyleScale(domain: windows, range: windows.indices.map { Self.windowColor($0, provider) })
+                    .chartLegend(.hidden)
                     .chartYScale(domain: 0...100)
-                    .chartYAxis { AxisMarks(values: [0, 25, 50, 75, 100]) { v in
-                        AxisGridLine().foregroundStyle(Theme.divider)
-                        AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d))%").font(.system(size: 10)).foregroundStyle(Theme.textMuted) } }
+                    .chartYAxis { AxisMarks(position: .trailing, values: [0, 25, 50, 75, 100]) { v in
+                        AxisGridLine().foregroundStyle(v.as(Double.self) == 100 ? Theme.critical.opacity(0.35) : Theme.line)
+                        AxisValueLabel { if let d = v.as(Double.self) { Text("\(Int(d))%").font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.textMuted) } }
                     } }
-                    .chartXAxis { AxisMarks { _ in AxisGridLine().foregroundStyle(Theme.divider); AxisValueLabel().font(.system(size: 10)).foregroundStyle(Theme.textMuted) } }
-                    .chartLegend(position: .top, alignment: .leading)
-                    .frame(height: 200)
+                    .chartXAxis { AxisMarks { _ in AxisGridLine().foregroundStyle(Theme.line); AxisValueLabel().font(.system(size: 10)).foregroundStyle(Theme.textMuted) } }
+                    .chartPlotStyle { $0.clipped() }
+                    .frame(height: 220)
                 }
             }
         }
+    }
+
+    static func windowColor(_ index: Int, _ provider: ProviderID) -> Color {
+        [Theme.textPrimary, provider.color, Theme.caution, Theme.textSecondary][index % 4]
     }
 
     private var rangeDays: [DayActivity] {
@@ -316,23 +328,27 @@ struct HistoryTab: View {
         let avg = active.isEmpty ? 0 : totalTokens / active.count
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Local activity").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                Text("from Claude Code, Codex and OpenCode session logs").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                Legend("Local activity")
+                Text("from Claude Code, Codex and OpenCode logs").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                 Spacer()
                 Picker("", selection: $activityProvider) {
-                    Text("All").tag(ProviderID?.none)
+                    Text("All agents").tag(ProviderID?.none)
                     ForEach([ProviderID.claude, .codex, .opencode]) { Text($0.displayName).tag(ProviderID?.some($0)) }
                 }
-                .frame(width: 130)
+                .labelsHidden().frame(width: 130)
             }
-            HStack(spacing: 10) {
-                StatTile(value: Format.tokens(totalTokens), label: "tokens · last \(range.rawValue.lowercased())")
-                StatTile(value: "\(totalMsgs)", label: "assistant turns")
-                StatTile(value: "\(active.count)", label: "active days")
-                StatTile(value: peak.map { Format.tokens($0.value) } ?? "—", label: peak.map { "peak · \($0.key.suffix(5))" } ?? "peak day", tint: Theme.accent)
-                StatTile(value: Format.tokens(avg), label: "avg per active day")
-            }
+            ReadoutStrip(items: [
+                .init(value: Format.tokens(totalTokens), label: "tokens, last \(range.rawValue.lowercased())"),
+                .init(value: totalMsgs.formatted(), label: "assistant turns"),
+                .init(value: "\(active.count)", label: active.count == 1 ? "active day" : "active days"),
+                .init(value: peak.map { Format.tokens($0.value) } ?? "—", label: peak.map { "peak, \(Self.dayLabel($0.key))" } ?? "peak day"),
+                .init(value: Format.tokens(avg), label: "per active day"),
+            ])
         }
+    }
+
+    static func dayLabel(_ key: String) -> String {
+        Format.day(from: key).map { WorkRange.format("EEE d MMM", $0) } ?? key
     }
 
     private var heatmapSection: some View {
@@ -341,17 +357,17 @@ struct HistoryTab: View {
             perDay[d.day, default: 0] += d.tokens
         }
         return Card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Activity · last 16 weeks").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                    Legend("Tokens per day · last 17 weeks")
                     Spacer()
-                    if let at = store.activity?.scannedAt {
-                        Text("scanned \(Format.relative(at, now: store.now))").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                    } else {
-                        Text("scanning logs…").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                    }
+                    Text(store.activity.map { "Scanned \(Format.relative($0.scannedAt, now: store.now))" } ?? "Reading logs…")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                 }
-                HeatmapView(values: perDay, color: activityProvider?.color ?? Theme.ok, weeks: 16, today: store.now)
+                HStack(alignment: .top, spacing: 36) {
+                    HeatmapView(values: perDay, color: activityProvider?.color ?? Theme.textPrimary, weeks: 17, today: store.now)
+                    WeekdayProfile(values: perDay, color: activityProvider?.color ?? Theme.textPrimary)
+                }
             }
         }
     }
@@ -364,7 +380,7 @@ struct HeatmapView: View {
     var color: Color
     var weeks: Int
     var today: Date
-    private let cell: CGFloat = 12
+    private let cell: CGFloat = 16
     private let gap: CGFloat = 3
 
     private var grid: [[Date]] {
@@ -372,9 +388,10 @@ struct HeatmapView: View {
         let start = cal.startOfDay(for: today)
         let weekday = cal.component(.weekday, from: start) // 1 = Sunday
         let daysBackToMonday = (weekday + 5) % 7
-        let thisMonday = start.addingTimeInterval(-Double(daysBackToMonday) * 86400)
-        let firstMonday = thisMonday.addingTimeInterval(-Double(weeks - 1) * 7 * 86400)
-        return (0..<weeks).map { w in (0..<7).map { d in firstMonday.addingTimeInterval(Double(w * 7 + d) * 86400) } }
+        let thisMonday = cal.date(byAdding: .day, value: -daysBackToMonday, to: start) ?? start
+        return (0..<weeks).map { w in
+            (0..<7).map { d in cal.date(byAdding: .day, value: (w - weeks + 1) * 7 + d, to: thisMonday) ?? thisMonday }
+        }
     }
 
     private var thresholds: [Int] {
@@ -384,41 +401,98 @@ struct HeatmapView: View {
         return [1, q(0.25), q(0.5), q(0.75)]
     }
 
+    private func fill(_ level: Int) -> Color {
+        level < 0 ? .clear : level == 0 ? Color.white.opacity(0.05) : color.opacity(0.18 + 0.82 * Double(level) / 4)
+    }
+
     var body: some View {
         let g = grid
         let t = thresholds
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: gap) {
                 VStack(spacing: gap) {
+                    Color.clear.frame(width: 26, height: 12)
                     ForEach(0..<7, id: \.self) { d in
                         Text(d == 0 ? "Mon" : d == 2 ? "Wed" : d == 4 ? "Fri" : "")
                             .font(.system(size: 9)).foregroundStyle(Theme.textMuted)
-                            .frame(width: 24, height: cell, alignment: .leading)
+                            .frame(width: 26, height: cell, alignment: .leading)
                     }
                 }
                 ForEach(0..<g.count, id: \.self) { w in
                     VStack(spacing: gap) {
+                        Text(monthLabel(g, w)).font(.system(size: 9)).foregroundStyle(Theme.textMuted)
+                            .fixedSize().frame(width: cell, height: 12, alignment: .leading)
                         ForEach(0..<7, id: \.self) { d in
                             let date = g[w][d]
                             let key = Format.dayKey(date)
                             let v = values[key] ?? 0
                             let level = date > today ? -1 : (v <= 0 ? 0 : (v >= t[3] ? 4 : v >= t[2] ? 3 : v >= t[1] ? 2 : 1))
-                            RoundedRectangle(cornerRadius: 2.5)
-                                .fill(level < 0 ? Color.clear : level == 0 ? Color.white.opacity(0.06) : color.opacity(0.25 + 0.75 * Double(level) / 4))
+                            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                                .fill(fill(level))
                                 .frame(width: cell, height: cell)
-                                .help(level < 0 ? "" : "\(key): \(Format.tokens(v)) tokens")
+                                .help(level < 0 ? "" : "\(HistoryTab.dayLabel(key)): \(Format.tokens(v)) tokens")
                         }
                     }
                 }
             }
             HStack(spacing: 4) {
-                Spacer()
-                Text("less").font(.system(size: 9)).foregroundStyle(Theme.textMuted)
+                Text("Less").font(.system(size: 9.5)).foregroundStyle(Theme.textMuted)
                 ForEach(0..<5, id: \.self) { l in
-                    RoundedRectangle(cornerRadius: 2).fill(l == 0 ? Color.white.opacity(0.06) : color.opacity(0.25 + 0.75 * Double(l) / 4)).frame(width: 10, height: 10)
+                    RoundedRectangle(cornerRadius: 2).fill(fill(l)).frame(width: 10, height: 10)
                 }
-                Text("more").font(.system(size: 9)).foregroundStyle(Theme.textMuted)
+                Text("More").font(.system(size: 9.5)).foregroundStyle(Theme.textMuted)
+            }
+            .padding(.leading, 26 + gap)
+        }
+    }
+
+    /// Month name above the first week that starts in it.
+    private func monthLabel(_ g: [[Date]], _ w: Int) -> String {
+        let cal = Calendar.current
+        let month = cal.component(.month, from: g[w][0])
+        if w > 0 && cal.component(.month, from: g[w - 1][0]) == month { return "" }
+        return w == 0 ? "" : WorkRange.format("MMM", g[w][0])
+    }
+}
+
+/// Average tokens on each weekday across the heatmap's days, busiest first to read at a glance.
+struct WeekdayProfile: View {
+    var values: [String: Int]
+    var color: Color
+
+    private var averages: [(name: String, value: Double)] {
+        var sum = [Int](repeating: 0, count: 7), count = [Int](repeating: 0, count: 7)
+        let cal = Calendar.current
+        for (key, v) in values {
+            guard let date = Format.day(from: key) else { continue }
+            let i = (cal.component(.weekday, from: date) + 5) % 7 // Monday = 0
+            sum[i] += v; count[i] += 1
+        }
+        let names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        return (0..<7).map { (names[$0], count[$0] > 0 ? Double(sum[$0]) / Double(count[$0]) : 0) }
+    }
+
+    var body: some View {
+        let rows = averages
+        let top = rows.map(\.value).max() ?? 0
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Average on active days").font(.system(size: 11)).foregroundStyle(Theme.textMuted).padding(.bottom, 2)
+            ForEach(rows, id: \.name) { row in
+                HStack(spacing: 10) {
+                    Text(row.name).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).frame(width: 28, alignment: .leading)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2).fill(Theme.well)
+                            RoundedRectangle(cornerRadius: 2).fill(color.opacity(row.value == top && top > 0 ? 0.95 : 0.55))
+                                .frame(width: top > 0 ? geo.size.width * row.value / top : 0)
+                        }
+                    }
+                    .frame(height: 8)
+                    Text(row.value > 0 ? Format.tokens(Int(row.value)) : "—").font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(Theme.textSecondary).frame(width: 48, alignment: .trailing)
+                }
             }
         }
+        .frame(maxWidth: .infinity)
     }
 }

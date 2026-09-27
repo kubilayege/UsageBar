@@ -142,7 +142,7 @@ struct UsageAnalysisView: View {
         let key = derivationKey
         let d = RenderFlags.isRendering ? AnalysisDerivation.compute(derivationInput(key)) : derived
         return VStack(alignment: .leading, spacing: 0) {
-            header(d).padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 16)
+            header(d).padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 14)
             controls(d).padding(.horizontal, 28).padding(.bottom, 18)
             Rectangle().fill(Theme.divider).frame(height: 1)
             MaybeScroll {
@@ -187,10 +187,10 @@ struct UsageAnalysisView: View {
     private func header(_ d: AnalysisDerived?) -> some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Usage & effort").font(.system(size: 26, weight: .bold, design: .rounded))
+                Text("Usage & effort").font(.system(size: 22, weight: .semibold))
                 HStack(spacing: 8) {
                     Text("\(Format.dateTime(start))  →  \(Format.dateTime(end))")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(Theme.textSecondary)
+                        .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.textSecondary)
                     if let result = state.result {
                         Text("·").foregroundStyle(Theme.textMuted)
                         Text("scanned \(Format.relative(result.scannedAt))").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
@@ -223,8 +223,7 @@ struct UsageAnalysisView: View {
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
-
+            
             Picker("Provider", selection: $selectedProvider) {
                 Text("All providers").tag(nil as ProviderID?)
                 ForEach(settings.orderedEnabledProviders) { Text($0.displayName).tag(Optional($0)) }
@@ -277,8 +276,7 @@ struct UsageAnalysisView: View {
             }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 64)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .panel()
     }
 
     // MARK: Overview
@@ -321,11 +319,11 @@ struct UsageAnalysisView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if value.hasPrefix("≥ ") {
-                        Text("≥").font(.system(size: 16, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.textMuted)
+                        Text("≥").font(Theme.readout(20)).foregroundStyle(Theme.textMuted)
                             .help("Lower bound: some turns have no price")
                     }
                     Text(value.hasPrefix("≥ ") ? String(value.dropFirst(2)) : value)
-                        .font(.system(size: 26, weight: .bold, design: .monospaced)).foregroundStyle(tint)
+                        .font(Theme.readout(32)).foregroundStyle(tint)
                     Text(unit).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
                 }
                 Text(detail).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -335,8 +333,7 @@ struct UsageAnalysisView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .panel()
     }
 
     // MARK: Highlights
@@ -376,13 +373,12 @@ struct UsageAnalysisView: View {
                 EffortPill(effort: row.effort)
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(value).font(.system(size: 18, weight: .bold, design: .monospaced))
+                Text(value).font(Theme.readout(22))
                 Text(caption).font(.system(size: 11)).foregroundStyle(Theme.textMuted)
             }
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .panel()
     }
 
     private func blockedHighlight(_ unpriced: [AnalysisTurn]) -> some View {
@@ -401,12 +397,12 @@ struct UsageAnalysisView: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(14).frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(Theme.cardStroke))
+        .background(Theme.bg, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(Color.white.opacity(0.12)))
     }
 
     private func eyebrow(_ text: String) -> some View {
-        Text(text.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(Theme.textMuted)
+        Legend(text)
     }
 
     // MARK: Table
@@ -418,7 +414,7 @@ struct UsageAnalysisView: View {
         let maxCost = rows.compactMap(\.costPerTurn).max() ?? 0
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Model & reasoning effort").font(.system(size: 15, weight: .semibold))
+                Text("Model & reasoning effort").font(.system(size: 14, weight: .semibold))
                 Text("\(rows.count) groups").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
                 Spacer()
                 HStack(spacing: 2) {
@@ -438,7 +434,7 @@ struct UsageAnalysisView: View {
                     Text("Est. total").frame(width: 72, alignment: .trailing)
                     Text("Price").frame(width: 56, alignment: .leading)
                 }
-                .font(.system(size: 10, weight: .semibold)).tracking(0.4).foregroundStyle(Theme.textMuted)
+                .font(.system(size: 9.5, weight: .semibold)).tracking(0.5).textCase(.uppercase).foregroundStyle(Theme.textMuted)
                 .padding(.bottom, 8).padding(.horizontal, 10)
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     AnalysisTableRow(row: row, total: total, maxTurns: maxTurns, maxCost: maxCost,
@@ -452,8 +448,7 @@ struct UsageAnalysisView: View {
             .padding(.horizontal, -10)
             .font(.system(size: 12, weight: .medium, design: .monospaced)).monospacedDigit()
         }
-        .padding(18).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .padding(18).panel()
     }
 
     // MARK: Subscription
@@ -463,7 +458,7 @@ struct UsageAnalysisView: View {
         let providers = settings.orderedEnabledProviders.filter { enabled.contains($0) }
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("What each plan costs per turn").font(.system(size: 15, weight: .semibold))
+                Text("What each plan costs per turn").font(.system(size: 14, weight: .semibold))
                 Text("Your monthly price, prorated to the selected \(days == 1 ? "day" : "\(days) days") and divided by the turns recorded.")
                     .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
             }
@@ -498,8 +493,7 @@ struct UsageAnalysisView: View {
             }
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .panel()
     }
 
     private func monthlyBinding(_ provider: ProviderID) -> Binding<Double?> {
@@ -515,7 +509,7 @@ struct UsageAnalysisView: View {
                     Image(systemName: "chevron.right").rotationEffect(.degrees(showRates ? 90 : 0))
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary).frame(width: 12)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Token prices").font(.system(size: 15, weight: .semibold))
+                        Text("Token prices").font(.system(size: 14, weight: .semibold))
                         Text(pricingSummary(d)).font(.system(size: 11)).foregroundStyle(d.unpricedModels.isEmpty ? Theme.textMuted : Theme.caution)
                     }
                     Spacer()
@@ -528,8 +522,7 @@ struct UsageAnalysisView: View {
             .buttonStyle(.plain)
             if showRates { costEditor(d).padding(.top, 16) }
         }
-        .padding(18).background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+        .padding(18).panel()
     }
 
     private func pricingSummary(_ d: AnalysisDerived) -> String {
@@ -565,7 +558,7 @@ struct UsageAnalysisView: View {
                     Text("Model").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Input"); Text("Cached"); Text("Cache write"); Text("Output"); Text("Source"); Text("")
                 }
-                .font(.system(size: 10, weight: .semibold)).tracking(0.4).foregroundStyle(Theme.textMuted)
+                .font(.system(size: 9.5, weight: .semibold)).tracking(0.5).textCase(.uppercase).foregroundStyle(Theme.textMuted)
                 ForEach(d.models) { model in
                     let listed = prices.catalog.match(model.model)
                     let override = state.rates[model.modelKey]
@@ -785,8 +778,7 @@ struct AnalysisSkeleton: View {
         content()
             .padding(16)
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-            .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
+            .panel()
     }
 }
 
@@ -798,7 +790,7 @@ struct SkeletonBlock: View {
     @State private var bright = false
     var body: some View {
         RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .fill(Color.white.opacity(bright ? 0.12 : 0.06))
+            .fill(Color.white.opacity(bright ? 0.1 : 0.05))
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .onAppear {

@@ -56,11 +56,19 @@ final class WorkLogState: ObservableObject {
         copy(receipt, id: "today")
     }
 
-    func copyImage(_ receipt: WorkReceipt) {
+    func copyImage(_ receipt: WorkReceipt, id: String = "image") {
         guard let image = ReceiptImage.render(receipt, options: options) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([image])
-        flash("image")
+        flash(id)
+    }
+
+    /// The receipt as a PNG file, so dragging it into Slack, Mail or Finder drops a named image.
+    func dragProvider(_ receipt: WorkReceipt) -> NSItemProvider {
+        guard let image = ReceiptImage.render(receipt, options: options), let png = ReceiptImage.png(image) else { return NSItemProvider() }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(receipt.range.fileStem + ".png")
+        do { try png.write(to: url) } catch { return NSItemProvider(object: image) }
+        return NSItemProvider(contentsOf: url) ?? NSItemProvider(object: image)
     }
 
     func save(_ receipt: WorkReceipt, as format: WorkExportFormat?) {
@@ -95,6 +103,7 @@ struct WorkLogView: View {
     @ObservedObject private var prices = ModelPriceStore.shared
     @State private var range: WorkRange
     @State private var cached: (key: Key, receipt: WorkReceipt)?
+    @State private var showPreview = false
 
     private struct Key: Equatable {
         var scannedAt: Date?, range: WorkRange, hidden: Set<String>, idle: Int, prices: Date
@@ -114,7 +123,7 @@ struct WorkLogView: View {
 
     var body: some View {
         MaybeScroll {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
                 header
                 if let receipt {
                     stats(receipt)
@@ -122,7 +131,8 @@ struct WorkLogView: View {
                     if receipt.isEmpty {
                         emptyState
                     } else {
-                        if range.kind != .day && receipt.days.count > 1 { dayChart(receipt) }
+                        if range.kind == .day { WorkTimeline(receipt: receipt) }
+                        else if receipt.days.count > 1 { dayChart(receipt) }
                         ForEach(receipt.projects) { ProjectCard(project: $0, receipt: receipt) }
                     }
                     footer(receipt)
@@ -134,7 +144,7 @@ struct WorkLogView: View {
                     .frame(maxWidth: .infinity, minHeight: 200)
                 }
             }
-            .padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 20)
+            .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
         }
         .onAppear { state.scan(ifOlderThan: 30); rebuild() }
         .onChange(of: key) { _, _ in rebuild() }
@@ -148,143 +158,135 @@ struct WorkLogView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Work Log").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                Text("What your agents worked on, read from local session logs").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-            }
-            Spacer()
+        PageHeader(title: "Work Log", subtitle: "What your agents worked on, read from local session logs.") {
             Picker("", selection: Binding(get: { range.kind }, set: { kind in
                 range = WorkRange(kind, containing: range.contains(Date()) ? Date() : range.interval.start)
             })) { ForEach(WorkRange.Kind.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).frame(width: 200).labelsHidden()
-            HStack(spacing: 2) {
+                .pickerStyle(.segmented).frame(width: 190).labelsHidden()
+            HStack(spacing: 0) {
                 stepButton("chevron.left", help: "Previous \(range.kind.rawValue.lowercased())") { range = range.shifted(by: -1) }
                 Text(range.relativeTitle())
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                    .frame(minWidth: 150).help(range.title)
+                    .frame(minWidth: 140).help(range.title)
                 stepButton("chevron.right", help: "Next \(range.kind.rawValue.lowercased())") { range = range.shifted(by: 1) }
                     .disabled(range.interval.end > Date())
             }
-            .padding(3)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill))
             if !range.contains(Date()) {
                 Button { range = .today(range.kind) } label: {
-                    Text("Today").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                    Text(range.kind == .day ? "Today" : "This \(range.kind.rawValue.lowercased())").font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(ChipButtonStyle())
+                .buttonStyle(ChipButtonStyle(compact: true))
             }
         }
     }
 
     private func stepButton(_ icon: String, help: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+            Image(systemName: icon).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.textSecondary)
                 .frame(width: 26, height: 24).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     // MARK: Totals
 
     private func stats(_ r: WorkReceipt) -> some View {
-        HStack(spacing: 10) {
-            StatTile(value: Format.hm(r.activeMinutes), label: "active time", tint: Theme.accent)
-            StatTile(value: "\(r.projects.count)", label: r.projects.count == 1 ? "project" : "projects")
-            StatTile(value: "\(r.sessionCount)", label: r.sessionCount == 1 ? "session" : "sessions")
-            StatTile(value: "\(r.fileCount)", label: "files changed")
-            StatTile(value: r.tokens > 0 ? Format.tokens(r.tokens) : "—", label: "tokens")
-            StatTile(value: WorkReceiptExport.costLabel(r.cost, unpriced: r.hasUnpricedUsage) ?? "—", label: "API value (est.)")
-        }
+        ReadoutStrip(items: [
+            .init(value: Format.hm(r.activeMinutes), label: "active time"),
+            .init(value: "\(r.projects.count)", label: r.projects.count == 1 ? "project" : "projects"),
+            .init(value: "\(r.sessionCount)", label: r.sessionCount == 1 ? "session" : "sessions"),
+            .init(value: "\(r.fileCount)", label: r.fileCount == 1 ? "file changed" : "files changed"),
+            .init(value: r.tokens > 0 ? Format.tokens(r.tokens) : "—", label: "tokens"),
+            .init(value: WorkReceiptExport.costLabel(r.cost, unpriced: r.hasUnpricedUsage) ?? "—", label: "API value, est."),
+        ], leadSize: 34)
     }
 
     private func actions(_ r: WorkReceipt) -> some View {
-        Card(padding: 12) {
-            HStack(spacing: 10) {
-                Button { state.copy(r) } label: {
-                    Label(state.copiedID == "receipt" ? "Copied" : "Copy receipt",
-                          systemImage: state.copiedID == "receipt" ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                }
-                .buttonStyle(ChipButtonStyle(selected: true))
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .help("Copy the whole \(range.kind.rawValue.lowercased()) as \(settings.workCopyFormat.rawValue.lowercased()) (⇧⌘C)")
-
-                Menu {
-                    Section("Copy") {
-                        ForEach(WorkExportFormat.allCases) { f in Button("Copy as \(f.rawValue)") { state.copy(r, as: f) } }
-                        Button("Copy Receipt Image") { state.copyImage(r) }
-                    }
-                    Section("Save") {
-                        ForEach(WorkExportFormat.allCases) { f in Button("Save as \(f.rawValue)…") { state.save(r, as: f) } }
-                        Button("Save Receipt Image…") { state.save(r, as: nil) }
-                    }
-                } label: {
-                    Label(state.copiedID == "image" ? "Image copied" : "Export", systemImage: "square.and.arrow.up")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
-                }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.chipFill))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
-
-                Spacer(minLength: 8)
-
-                Text("Copy as").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                Picker("", selection: $settings.workCopyFormat) {
-                    Text("Text").tag(WorkExportFormat.text)
-                    Text("Markdown").tag(WorkExportFormat.markdown)
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 150)
-
-                Rectangle().fill(Theme.divider).frame(width: 1, height: 22)
-                Text("Include").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                toggleChip("Files", $settings.workExportFiles)
-                toggleChip("Times", $settings.workExportTimes)
-                toggleChip("Tokens & cost", $settings.workExportUsage)
+        HStack(spacing: 8) {
+            Button { state.copy(r) } label: {
+                Label(state.copiedID == "receipt" ? "Copied" : "Copy receipt",
+                      systemImage: state.copiedID == "receipt" ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .semibold))
             }
-        }
-    }
+            .buttonStyle(ChipButtonStyle(prominent: true))
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .help("Copy the whole \(range.kind.rawValue.lowercased()) as \(settings.workCopyFormat.rawValue.lowercased()) (⇧⌘C)")
 
-    private func toggleChip(_ title: String, _ value: Binding<Bool>) -> some View {
-        Button { value.wrappedValue.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: value.wrappedValue ? "checkmark.square.fill" : "square").font(.system(size: 11))
-                Text(title).font(.system(size: 11, weight: .medium))
+            Button { showPreview.toggle() } label: {
+                Label("Preview", systemImage: "receipt").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textPrimary)
             }
-            .foregroundStyle(value.wrappedValue ? Theme.textPrimary : Theme.textMuted)
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(value.wrappedValue ? Theme.chipSelected : Theme.chipFill))
-            .contentShape(Rectangle())
+            .buttonStyle(ChipButtonStyle())
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .help("See the receipt as it will be shared, then copy, save or drag it (⇧⌘P)")
+            .popover(isPresented: $showPreview, arrowEdge: .bottom) {
+                ReceiptPreview(receipt: r, maxPaperHeight: 560)
+                    .padding(16).frame(width: 400)
+                    .background(Theme.bg)
+                    .preferredColorScheme(.dark)
+            }
+
+            Menu {
+                Section("Copy") {
+                    ForEach(WorkExportFormat.allCases) { f in Button("Copy as \(f.rawValue)") { state.copy(r, as: f) } }
+                    Button("Copy Receipt Image") { state.copyImage(r) }
+                }
+                Section("Save") {
+                    ForEach(WorkExportFormat.allCases) { f in Button("Save as \(f.rawValue)…") { state.save(r, as: f) } }
+                    Button("Save Receipt Image…") { state.save(r, as: nil) }
+                }
+            } label: {
+                Label(state.copiedID == "image" ? "Image copied" : "Export", systemImage: "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textPrimary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .padding(.horizontal, 11).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill))
+
+            Spacer(minLength: 12)
+
+            Text("Copy as").font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
+            Picker("", selection: $settings.workCopyFormat) {
+                Text("Text").tag(WorkExportFormat.text)
+                Text("Markdown").tag(WorkExportFormat.markdown)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 140)
+
+            Rectangle().fill(Theme.line).frame(width: 1, height: 20).padding(.horizontal, 4)
+            Text("Include").font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
+            IncludeChip(title: "Files", value: $settings.workExportFiles)
+            IncludeChip(title: "Times", value: $settings.workExportTimes)
+            IncludeChip(title: "Tokens & cost", value: $settings.workExportUsage)
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: Days
 
     private func dayChart(_ r: WorkReceipt) -> some View {
         Card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Active time by day").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                    Legend("Active time by day")
                     Spacer()
                     Text("\(r.days.count) active days").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                 }
                 Chart(r.days) { d in
                     BarMark(x: .value("Day", d.date, unit: .day), y: .value("Hours", Double(d.activeMinutes) / 60))
-                        .foregroundStyle(Theme.accent.opacity(0.85))
-                        .cornerRadius(3)
+                        .foregroundStyle(Theme.textPrimary.opacity(0.85))
+                        .cornerRadius(2)
                 }
                 .chartXScale(domain: r.range.interval.start...r.range.interval.end)
-                .chartYAxis { AxisMarks { v in
-                    AxisGridLine().foregroundStyle(Theme.divider)
+                .chartYAxis { AxisMarks(position: .trailing) { v in
+                    AxisGridLine().foregroundStyle(Theme.line)
                     AxisValueLabel { if let h = v.as(Double.self) { Text("\(Int(h))h").font(.system(size: 10)).foregroundStyle(Theme.textMuted) } }
                 } }
                 .chartXAxis { AxisMarks(values: .stride(by: .day, count: r.range.kind == .month ? 5 : 1)) { _ in
                     AxisValueLabel(format: r.range.kind == .month ? .dateTime.day() : .dateTime.weekday(.abbreviated)).font(.system(size: 10)).foregroundStyle(Theme.textMuted)
                 } }
-                .frame(height: 110)
+                .frame(height: 120)
             }
         }
     }
@@ -292,25 +294,22 @@ struct WorkLogView: View {
     // MARK: Empty / footer
 
     private var emptyState: some View {
-        Card {
-            VStack(spacing: 8) {
-                Image(systemName: "receipt").font(.system(size: 26)).foregroundStyle(Theme.textMuted)
-                Text("No agent activity \(range.kind == .day ? "on this day" : "this \(range.kind.rawValue.lowercased())")")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textSecondary)
-                Text("Claude Code, Codex and OpenCode sessions show up here as you work.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 24)
+        VStack(spacing: 8) {
+            Image(systemName: "receipt").font(.system(size: 24, weight: .light)).foregroundStyle(Theme.textMuted)
+            Text("No agent activity \(range.kind == .day ? "on this day" : "this \(range.kind.rawValue.lowercased())")")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+            Text("Claude Code, Codex and OpenCode sessions show up here as you work. Use the arrows to look at an earlier \(range.kind.rawValue.lowercased()).")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.textMuted).multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity).padding(.vertical, 36).padding(.horizontal, 20)
+        .panel()
     }
 
     private func footer(_ r: WorkReceipt) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 14) {
             Menu {
                 ForEach([5, 10, 15, 30, 60], id: \.self) { m in
-                    Button { settings.workIdleMinutes = m } label: {
-                        HStack { Text("\(m) minutes"); if m == settings.workIdleMinutes { Image(systemName: "checkmark") } }
-                    }
+                    Toggle("\(m) minutes", isOn: Binding(get: { m == settings.workIdleMinutes }, set: { if $0 { settings.workIdleMinutes = m } }))
                 }
             } label: {
                 Text("Idle after \(settings.workIdleMinutes)m").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
@@ -334,17 +333,109 @@ struct WorkLogView: View {
             }
             Spacer()
             Text("Titles, file names and times only. Prompts and code never leave your logs.")
-                .font(.system(size: 10)).foregroundStyle(Theme.textMuted)
+                .font(.system(size: 10.5)).foregroundStyle(Theme.textMuted)
             Button { state.scan() } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "arrow.clockwise").font(.system(size: 9.5, weight: .semibold))
                     Text(state.isScanning ? "Scanning…" : "Scanned \(Format.relative(state.data?.scannedAt))").font(.system(size: 11))
                 }
                 .foregroundStyle(Theme.textMuted)
             }
             .buttonStyle(.plain)
             .disabled(state.isScanning)
+            .help("Read the session logs again")
         }
+    }
+}
+
+// MARK: - Day timeline
+
+/// One lane per project across the working hours of the day; each mark is a minute an agent was active.
+private struct WorkTimeline: View {
+    var receipt: WorkReceipt
+    private let maxLanes = 8
+
+    private var bounds: (start: Date, end: Date) {
+        let cal = Calendar.current
+        let minutes = receipt.projects.flatMap { $0.sessions.flatMap(\.minutes) }
+        let first = Date(timeIntervalSince1970: Double(minutes.min() ?? 0) * 60)
+        let last = Date(timeIntervalSince1970: Double((minutes.max() ?? 0) + 1) * 60)
+        var start = cal.dateInterval(of: .hour, for: first)?.start ?? first
+        var end = cal.dateInterval(of: .hour, for: last)?.end ?? last
+        if end.timeIntervalSince(start) < 4 * 3600 { end = start.addingTimeInterval(4 * 3600) }
+        start = max(start, receipt.range.interval.start)
+        end = min(end, receipt.range.interval.end)
+        return (start, end)
+    }
+
+    var body: some View {
+        let b = bounds
+        let span = max(60, b.end.timeIntervalSince(b.start))
+        let hours = Int((span / 3600).rounded())
+        let step = hours > 12 ? 2 : 1
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Legend("Timeline")
+                    Spacer()
+                    Text("Each mark is a minute an agent was working").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                }
+                VStack(spacing: 6) {
+                    ForEach(receipt.projects.prefix(maxLanes)) { project in
+                        HStack(spacing: 12) {
+                            Text(project.name).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                                .lineLimit(1).truncationMode(.middle).frame(width: 130, alignment: .leading)
+                            lane(project, start: b.start, span: span, hours: hours, step: step)
+                            Text(Format.hm(project.activeMinutes)).font(Theme.readout(13)).foregroundStyle(Theme.textPrimary)
+                                .frame(width: 50, alignment: .trailing)
+                        }
+                        .frame(height: 18)
+                    }
+                    if receipt.projects.count > maxLanes {
+                        Text("+\(receipt.projects.count - maxLanes) more projects below").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 142)
+                    }
+                    HStack(spacing: 12) {
+                        Color.clear.frame(width: 130, height: 1)
+                        GeometryReader { geo in
+                            ForEach(Array(stride(from: 0, through: hours, by: step)), id: \.self) { h in
+                                Text(WorkRange.format("HH:mm", b.start.addingTimeInterval(Double(h) * 3600)))
+                                    .font(.system(size: 9.5).monospacedDigit()).foregroundStyle(Theme.textMuted)
+                                    .fixedSize()
+                                    .position(x: geo.size.width * CGFloat(Double(h) * 3600 / span), y: 6)
+                            }
+                        }
+                        .frame(height: 12)
+                        Color.clear.frame(width: 50, height: 1)
+                    }
+                }
+            }
+        }
+    }
+
+    private func lane(_ project: WorkReceipt.Project, start: Date, span: TimeInterval, hours: Int, step: Int) -> some View {
+        Canvas { ctx, size in
+            ctx.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 3), with: .color(Theme.well))
+            for h in stride(from: step, to: hours, by: step) {
+                let x = size.width * CGFloat(Double(h) * 3600 / span)
+                ctx.fill(Path(CGRect(x: x - 0.5, y: 0, width: 1, height: size.height)), with: .color(.white.opacity(0.05)))
+            }
+            let minuteWidth = max(1.5, size.width * 60 / CGFloat(span))
+            for session in project.sessions {
+                // Merge consecutive minutes into runs so long stretches draw as one bar.
+                var runs: [(Int, Int)] = []
+                for m in session.minutes {
+                    if let last = runs.last, m == last.1 + 1 { runs[runs.count - 1].1 = m } else { runs.append((m, m)) }
+                }
+                for (a, b) in runs {
+                    let x0 = size.width * CGFloat((Double(a) * 60 - start.timeIntervalSince1970) / span)
+                    let x1 = size.width * CGFloat((Double(b + 1) * 60 - start.timeIntervalSince1970) / span)
+                    let rect = CGRect(x: x0, y: 3, width: max(minuteWidth, x1 - x0), height: size.height - 6)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(session.provider.color))
+                }
+            }
+        }
+        .help(project.sessions.map { "\($0.name): \(WorkReceipt.span($0, multiDay: false))" }.joined(separator: "\n"))
     }
 }
 
@@ -357,37 +448,41 @@ private struct ProjectCard: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .center, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(project.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.textPrimary).lineLimit(1)
-                            ForEach(project.providers) { ProviderDot(id: $0, size: 7).help($0.displayName) }
-                            if !project.branches.isEmpty {
-                                Text(project.branches.prefix(2).joined(separator: ", ")).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(1)
-                            }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Text(project.name).font(.system(size: 14.5, weight: .semibold)).foregroundStyle(Theme.textPrimary).lineLimit(1)
+                        ForEach(project.providers) { ProviderDot(id: $0, size: 6).help($0.displayName) }
+                        if !project.branches.isEmpty {
+                            Text(project.branches.prefix(2).joined(separator: ", ")).font(Theme.mono(10.5)).foregroundStyle(Theme.textMuted).lineLimit(1)
                         }
-                        Text(project.displayPath).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(1).truncationMode(.middle)
                     }
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(Format.hm(project.activeMinutes)).font(.system(size: 16, weight: .bold, design: .monospaced)).foregroundStyle(Theme.textPrimary)
-                        Text(details).font(.system(size: 11)).foregroundStyle(Theme.textMuted)
-                    }
-                    CopyIconButton(id: project.id, help: "Copy this project's work") {
-                        state.copy(receipt.only(project: project), scope: .project, id: project.id)
-                    }
-                    IconButton(systemImage: "eye.slash", help: "Hide \(project.name) from the log and exports (client or NDA work)") {
-                        settings.hiddenWorkProjects.insert(project.id)
-                    }
+                    Text(project.displayPath).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(1).truncationMode(.middle)
                 }
-                Rectangle().fill(Theme.divider).frame(height: 1)
-                VStack(spacing: 2) {
-                    ForEach(project.sessions) { SessionRow(session: $0, receipt: receipt, multiDay: receipt.range.kind != .day) }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(Format.hm(project.activeMinutes)).font(Theme.readout(20)).foregroundStyle(Theme.textPrimary)
+                    Text(details).font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                }
+                CopyIconButton(id: project.id, help: "Copy this project's work") {
+                    state.copy(receipt.only(project: project), scope: .project, id: project.id)
+                }
+                IconButton(systemImage: "eye.slash", help: "Hide \(project.name) from the log and exports (client or NDA work)") {
+                    settings.hiddenWorkProjects.insert(project.id)
                 }
             }
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+            Rectangle().fill(Theme.line).frame(height: 1)
+            VStack(spacing: 0) {
+                ForEach(Array(project.sessions.enumerated()), id: \.element.id) { i, s in
+                    if i > 0 { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, 34) }
+                    SessionRow(session: s, receipt: receipt, multiDay: receipt.range.kind != .day)
+                }
+            }
+            .padding(.vertical, 4)
         }
+        .panel()
     }
 
     private var details: String {
@@ -408,19 +503,20 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            ProviderDot(id: session.provider, size: 8).padding(.top, 5)
-            VStack(alignment: .leading, spacing: 5) {
+            ProviderDot(id: session.provider, size: 6).padding(.top, 6).frame(width: 8)
+                .help(session.provider.displayName)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(session.name).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.textPrimary).lineLimit(2)
                 Text(meta).font(.system(size: 11)).foregroundStyle(Theme.textMuted).lineLimit(1)
                 if !session.files.isEmpty {
                     FlowLayout(spacing: 4) {
                         ForEach(session.files.prefix(maxFiles), id: \.path) { f in
                             HStack(spacing: 3) {
-                                Text(f.name).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Theme.textSecondary)
-                                if f.edits > 1 { Text("×\(f.edits)").font(.system(size: 10)).foregroundStyle(Theme.textMuted) }
+                                Text(f.name).font(Theme.mono(10.5)).foregroundStyle(Theme.textSecondary)
+                                if f.edits > 1 { Text("×\(f.edits)").font(Theme.mono(10)).foregroundStyle(Theme.textMuted) }
                             }
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Theme.chipFill))
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Theme.well))
                             .help(f.path)
                         }
                         if session.files.count > maxFiles {
@@ -429,18 +525,19 @@ private struct SessionRow: View {
                                 .help(session.files.dropFirst(maxFiles).map(\.path).joined(separator: "\n"))
                         }
                     }
+                    .padding(.top, 2)
                 }
             }
             Spacer(minLength: 8)
-            Text(Format.hm(session.activeMinutes)).font(.system(size: 12, weight: .medium, design: .monospaced)).foregroundStyle(Theme.textSecondary)
+            Text(Format.hm(session.activeMinutes)).font(Theme.readout(14)).foregroundStyle(Theme.textSecondary)
                 .padding(.top, 1)
             CopyIconButton(id: session.id, help: "Copy this session") {
                 state.copy(receipt.only(session: session), scope: .session, id: session.id)
             }
-            .opacity(hover || state.copiedID == session.id ? 1 : 0.55)
+            .opacity(hover || state.copiedID == session.id ? 1 : 0.35)
         }
-        .padding(.vertical, 7).padding(.horizontal, 8)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hover ? Color.white.opacity(0.03) : .clear))
+        .padding(.vertical, 9).padding(.horizontal, 14)
+        .background(hover ? Color.white.opacity(0.025) : .clear)
         .onHover { hover = $0 }
     }
 
@@ -457,29 +554,6 @@ private struct SessionRow: View {
 
 // MARK: - Small buttons
 
-struct IconButton: View {
-    var systemImage: String
-    var help: String
-    var tint: Color = Theme.textSecondary
-    var action: () -> Void
-    @State private var hover = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(hover ? Theme.textPrimary : tint)
-                .frame(width: 28, height: 28)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(hover ? Color.white.opacity(0.1) : Theme.chipFill))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-        .help(help)
-    }
-}
-
 struct CopyIconButton: View {
     var id: String
     var help: String
@@ -489,6 +563,123 @@ struct CopyIconButton: View {
     var body: some View {
         let copied = state.copiedID == id
         IconButton(systemImage: copied ? "checkmark" : "doc.on.doc", help: help, tint: copied ? Theme.ok : Theme.textSecondary, action: action)
+    }
+}
+
+// MARK: - Receipt preview
+
+/// The receipt as it will be shared, with every way out of it underneath: copy, save, or drag.
+struct ReceiptPreview: View {
+    var receipt: WorkReceipt
+    /// Tall receipts scroll inside this height.
+    var maxPaperHeight: CGFloat = 520
+    @ObservedObject private var state = WorkLogState.shared
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var hoverPaper = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            paper
+            HStack(spacing: 6) {
+                Text("Include").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                IncludeChip(title: "Times", value: $settings.workExportTimes)
+                IncludeChip(title: "Files", value: $settings.workExportFiles)
+                IncludeChip(title: "Tokens & cost", value: $settings.workExportUsage)
+                Spacer(minLength: 0)
+            }
+            exportBar
+        }
+    }
+
+    private var paper: some View {
+        let sheet = ReceiptPaperView(receipt: receipt, options: state.options)
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.5), radius: 12, y: 5)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+        // Short receipts sit at their natural height; long ones scroll inside the limit.
+        return ViewThatFits(in: .vertical) {
+            sheet
+            ScrollView(.vertical, showsIndicators: false) { sheet }
+        }
+        .frame(maxHeight: maxPaperHeight)
+        .overlay(alignment: .bottom) {
+            if hoverPaper {
+                Label("Drag into Slack, Mail or Finder", systemImage: "hand.draw")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(.black.opacity(0.75)))
+                    .padding(.bottom, 14)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hoverPaper = h } }
+        .onDrag { state.dragProvider(receipt) }
+        .help("Drag the receipt out as a PNG")
+        .accessibilityLabel("Work receipt for \(receipt.range.title), \(Format.hm(receipt.activeMinutes)) active")
+    }
+
+    private var exportBar: some View {
+        let imageCopied = state.copiedID == "preview-image", textCopied = state.copiedID == "preview-text"
+        let format = settings.workCopyFormat
+        return HStack(spacing: 6) {
+            Button { state.copyImage(receipt, id: "preview-image") } label: {
+                Label(imageCopied ? "Copied" : "Copy image", systemImage: imageCopied ? "checkmark" : "photo")
+                    .font(.system(size: 12, weight: .semibold)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(ChipButtonStyle(prominent: true))
+            .help("Copy the receipt as a picture, ready to paste into chat")
+
+            Button { state.copy(receipt, id: "preview-text") } label: {
+                Label(textCopied ? "Copied" : "Copy \(format == .markdown ? "Markdown" : "text")", systemImage: textCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(ChipButtonStyle())
+            .help("Copy the receipt as \(format.rawValue.lowercased())")
+
+            Menu {
+                Section("Copy") {
+                    ForEach(WorkExportFormat.allCases.filter { $0 != format }) { f in
+                        Button("Copy as \(f.rawValue)") { state.copy(receipt, as: f, id: "preview-text") }
+                    }
+                }
+                Section("Save") {
+                    Button("Save Image…") { state.save(receipt, as: nil) }
+                    ForEach(WorkExportFormat.allCases) { f in Button("Save \(f.rawValue)…") { state.save(receipt, as: f) } }
+                }
+            } label: {
+                Image(systemName: "square.and.arrow.down").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textPrimary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .frame(width: 38, height: 32)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill))
+            .help("Other formats, or save to a file")
+            .accessibilityLabel("Save or copy in another format")
+        }
+    }
+}
+
+/// An export option that can be switched on and off.
+struct IncludeChip: View {
+    var title: String
+    @Binding var value: Bool
+
+    var body: some View {
+        Button { value.toggle() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: value ? "checkmark" : "plus").font(.system(size: 9, weight: .bold))
+                Text(title).font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(value ? Theme.textPrimary : Theme.textMuted)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(value ? Theme.chipSelected : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(value ? .clear : Theme.line, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(value ? .isSelected : [])
+        .help(value ? "Exports include \(title.lowercased())" : "Exports leave out \(title.lowercased())")
     }
 }
 

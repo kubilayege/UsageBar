@@ -6,29 +6,15 @@ struct PopoverView: View {
     @ObservedObject private var updates = UpdateChecker.shared
     @ObservedObject private var workLog = WorkLogState.shared
     var viewportHeight: CGFloat = 720
+    @State var showingReceipt = false
+    @State private var receiptRange: QuickRange = .today
 
     private let width: CGFloat = 400
+    private let inset: CGFloat = 16
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
-            filterBar.padding(.horizontal, 18)
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    cardsSection.padding(.top, 6)
-                    Rectangle().fill(Theme.divider).frame(height: 1).padding(.horizontal, 18)
-                    if settings.showLiveSessions {
-                        liveSessionsSection.padding(.horizontal, 18).padding(.top, 12)
-                    }
-                    if !settings.compactPopover {
-                        statusSection.padding(.horizontal, 18).padding(.top, 12)
-                    }
-                }
-                .padding(.bottom, 8)
-            }
-            .frame(maxHeight: .infinity)
-            SleepControlView().padding(.horizontal, 18).padding(.top, 10)
-            footer.padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 16)
+        Group {
+            if showingReceipt { receiptPage } else { usagePage }
         }
         .frame(width: width, height: viewportHeight)
         .background(Theme.bg)
@@ -36,158 +22,256 @@ struct PopoverView: View {
         .preferredColorScheme(.dark)
     }
 
+    private var usagePage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(.horizontal, inset).padding(.top, 13).padding(.bottom, 12)
+            runway
+            tabs.padding(.horizontal, inset - 4).padding(.top, 10).padding(.bottom, 4)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    cards
+                    if !settings.compactPopover && !store.visibleProviders.isEmpty {
+                        MeterKey().padding(.horizontal, inset).padding(.top, 2).padding(.bottom, 12)
+                    }
+                    if settings.showLiveSessions { liveSessions.padding(.horizontal, inset).padding(.top, 12) }
+                    if !settings.compactPopover { statusSection.padding(.horizontal, inset).padding(.top, 14) }
+                }
+                .padding(.bottom, 12)
+            }
+            .frame(maxHeight: .infinity)
+            footer.padding(.horizontal, inset).padding(.top, 10).padding(.bottom, 14)
+                .background(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1) }
+        }
+    }
+
+    // MARK: Receipt page
+
+    enum QuickRange: String, CaseIterable, Identifiable {
+        case today = "Today", yesterday = "Yesterday", week = "This week"
+        var id: String { rawValue }
+        var range: WorkRange {
+            switch self {
+            case .today: return .today()
+            case .yesterday: return WorkRange.today().shifted(by: -1)
+            case .week: return .today(.week)
+            }
+        }
+    }
+
+    private var receiptPage: some View {
+        let receipt = workLog.receipt(receiptRange.range)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button { withAnimation(.snappy(duration: 0.2)) { showingReceipt = false } } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                        Text("Usage").font(.system(size: 12.5, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.textSecondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .help("Back to usage (Esc)")
+                Spacer()
+                Text("Work receipt").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Button { NotificationCenter.default.post(name: .usageBarOpenWorkLog, object: nil) } label: {
+                    HStack(spacing: 3) {
+                        Text("Work Log").font(.system(size: 12, weight: .medium))
+                        Image(systemName: "arrow.up.forward").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open the full Work Log with projects, files and every session")
+            }
+            .padding(.horizontal, inset).padding(.top, 14).padding(.bottom, 10)
+
+            HStack(spacing: 2) {
+                ForEach(QuickRange.allCases) { r in
+                    let selected = receiptRange == r
+                    Button { receiptRange = r } label: {
+                        Text(r.rawValue).font(.system(size: 12, weight: selected ? .semibold : .medium))
+                            .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                            .frame(maxWidth: .infinity).frame(height: 26)
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Theme.chipSelected : .clear))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.chipFill))
+            .padding(.horizontal, inset)
+
+            if let receipt {
+                Text(receipt.isEmpty ? "No agent activity \(receiptRange == .week ? "this week" : receiptRange.rawValue.lowercased()) yet."
+                     : "\(Format.hm(receipt.activeMinutes)) active · \(WorkReceiptExport.count(receipt.projects.count, "project")) · \(WorkReceiptExport.count(receipt.sessionCount, "session"))")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
+                    .padding(.horizontal, inset).padding(.top, 10).padding(.bottom, 8)
+                ReceiptPreview(receipt: receipt, maxPaperHeight: viewportHeight - 250)
+                    .padding(.horizontal, inset).padding(.bottom, 14)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading local agent logs…").font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear { workLog.scan(ifOlderThan: 60) }
+    }
+
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 12) {
-            AppLogoView(size: 48)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("UsageBar")
-                    .font(.system(size: 19, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                HStack(spacing: 6) {
-                    Circle().fill(store.isRefreshing ? Theme.caution : Theme.ok).frame(width: 6, height: 6)
-                    Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.textSecondary).lineLimit(1)
-                }
-            }
-            Spacer()
-        }
-    }
-
-    private var subtitle: String {
-        let names = settings.orderedEnabledProviders.map(\.displayName)
-        if names.isEmpty { return "No providers enabled" }
-        if names.count <= 3 { return "Track " + names.joined(separator: ", ") }
-        return "Track \(names.prefix(3).joined(separator: ", ")) & more"
-    }
-
-    // MARK: Filter
-
-    private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) {
-            filterChip(nil) {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.grid.2x2").font(.system(size: 12))
-                    Text("All").font(.system(size: 13, weight: .semibold))
-                }
-            }
-            ForEach(settings.orderedEnabledProviders) { id in
-                filterChip(id) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 5) {
-                            ProviderDot(id: id, size: 7)
-                            Text(id.displayName).font(.system(size: 12, weight: .medium)).lineLimit(1).fixedSize()
-                        }
-                        Text(store.snapshot(id)?.primaryWindows.map(\.label).joined(separator: " · ") ?? id.windowSummary)
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.textMuted)
-                            .lineLimit(1)
+        HStack(spacing: 8) {
+            AppLogoView(size: 22)
+            Text("UsageBar").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+            Spacer(minLength: 8)
+            if let version = updates.availableVersion ?? (RenderFlags.isRendering ? "preview" : nil) {
+                Button { updates.check() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle.fill").font(.system(size: 10.5))
+                        Text("Update ready").font(.system(size: 11, weight: .semibold))
                     }
+                    .foregroundStyle(Theme.onBone)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Theme.accent))
                 }
+                .buttonStyle(.plain)
+                .disabled(!updates.canCheckForUpdates && !RenderFlags.isRendering)
+                .help("UsageBar \(version) is ready. Review and install it.")
+            }
+            if store.isRefreshing {
+                ProgressView().controlSize(.mini)
+            } else {
+                Text("Updated \(Format.relative(store.lastRefresh, now: store.now))")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                    .help("Refreshes every \(Format.interval(settings.refreshInterval))")
             }
         }
-        .padding(4)
-        }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.chipFill))
-        .frame(maxWidth: .infinity)
-        .frame(height: 48)
     }
 
-    private func filterChip<Label: View>(_ id: ProviderID?, @ViewBuilder label: () -> Label) -> some View {
+    // MARK: Runway
+
+    @ViewBuilder private var runway: some View {
+        let r = Runway(store.visibleProviders.compactMap { id in store.snapshot(id).map { (id, $0) } }, now: store.now)
+        if r.lead != nil {
+            RunwayView(runway: r, now: store.now, size: settings.compactPopover ? .compact : .popover)
+                .padding(.horizontal, 14).padding(.vertical, settings.compactPopover ? 9 : 13)
+                .panel(radius: 11)
+                .padding(.horizontal, inset - 4)
+        }
+    }
+
+    // MARK: Tabs
+
+    private var tabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                tab(nil, "All")
+                ForEach(settings.orderedEnabledProviders) { tab($0, $0.displayName) }
+            }
+        }
+        .frame(height: 30)
+    }
+
+    private func tab(_ id: ProviderID?, _ title: String) -> some View {
         let selected = store.filter == id
-        return Button {
-            store.filter = id
-        } label: {
-            label()
-                .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 5)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 34)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(selected ? Theme.chipSelected : .clear))
-                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(selected ? Theme.chipSelectedStroke : .clear, lineWidth: 1))
-                .contentShape(Rectangle())
+        let status = id.flatMap { store.snapshot($0) }.map { ProviderStatus.of($0, now: store.now) }
+        return Button { store.filter = id } label: {
+            HStack(spacing: 5) {
+                if let status { Circle().fill(status.color).frame(width: 5, height: 5) }
+                Text(title).font(.system(size: 12, weight: selected ? .semibold : .medium)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+            .padding(.horizontal, 9).frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Theme.chipSelected : .clear))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(id.map { p in status.map { "\(p.displayName): \($0.text)" } ?? p.displayName } ?? "All providers")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // MARK: Cards
 
-    private var cardsSection: some View {
+    private var cards: some View {
         let ids = store.visibleProviders
-        return cards(ids)
-    }
-
-    private func cards(_ ids: [ProviderID]) -> some View {
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             if ids.isEmpty {
-                Text("Enable a provider in Settings to start tracking.")
-                    .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
-                    .padding(.vertical, 24)
+                Text("Turn on a provider in Settings to start tracking.")
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 28)
             }
             ForEach(Array(ids.enumerated()), id: \.element) { i, id in
-                ProviderCardView(id: id, compact: settings.compactPopover, expanded: store.filter != nil)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
+                if i > 0 { Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, inset) }
+                ProviderCardView(id: id, compact: settings.compactPopover, expanded: false)
+                    .padding(.horizontal, inset)
+                    .padding(.vertical, settings.compactPopover ? 9 : 12)
+                    .contentShape(Rectangle())
                     .contextMenu {
                         Button("Refresh \(id.displayName)") { Task { await store.refresh(id) } }
                         Button("Hide \(id.displayName)") { settings.toggle(id) }
                     }
-                if i < ids.count - 1 {
-                    Rectangle().fill(Theme.divider).frame(height: 1).padding(.horizontal, 18)
-                }
             }
         }
     }
 
     // MARK: Live sessions
 
-    private var liveSessionsSection: some View {
+    private var liveSessions: some View {
         let sessions = Array(SelectionFilter.apply(
             to: store.liveSessions,
             enabled: settings.enabledProviders,
             selected: store.filter,
             id: \.provider
         ).prefix(5))
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text("LIVE SESSIONS").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.textMuted)
-                if !sessions.isEmpty {
-                    Text("\(sessions.count)").font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.textMuted)
-                }
-                Spacer()
-                Text("recent or running").font(.system(size: 10)).foregroundStyle(Theme.textMuted)
+                Legend("Live sessions")
+                if !sessions.isEmpty { Text("\(sessions.count)").font(Theme.legend).foregroundStyle(Theme.textMuted) }
             }
+            .padding(.bottom, 2)
             if sessions.isEmpty {
-                Text(store.filter.map { "No \($0.displayName) sessions active right now." } ?? "No agent sessions active right now.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                Text(store.filter.map { "No \($0.displayName) sessions in the last 10 minutes." } ?? "No agent sessions in the last 10 minutes.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
             }
-            ForEach(sessions) { s in LiveSessionRow(session: s, now: store.now) }
+            ForEach(sessions) { LiveSessionRow(session: $0, now: store.now) }
         }
     }
 
-    // MARK: Status / Keep awake
+    // MARK: Service status
 
     private var statusSection: some View {
         let statuses = store.serviceStatuses.filter { status in
             settings.orderedEnabledProviders.contains { $0.statusService == status.service }
                 && (store.filter == nil || store.filter?.statusService == status.service)
         }
-        return FlowLayout(spacing: 8) {
-            ForEach(statuses) { s in
-                Button { NSWorkspace.shared.open(s.service.pageURL) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: s.isOperational ? "checkmark.circle" : "exclamationmark.circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(s.color)
-                        Text(s.service.label).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
-                        Text(s.shortLabel).font(.system(size: 12, weight: .semibold)).foregroundStyle(s.color)
+        return Group {
+            if !statuses.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Legend("Service status")
+                    FlowLayout(spacing: 12) {
+                        ForEach(statuses) { s in
+                            Button { NSWorkspace.shared.open(s.service.pageURL) } label: {
+                                HStack(spacing: 5) {
+                                    Circle().fill(s.color).frame(width: 5, height: 5)
+                                    Text(s.service.label).foregroundStyle(Theme.textSecondary)
+                                    if !s.isOperational { Text(s.shortLabel).foregroundStyle(s.color).fontWeight(.semibold) }
+                                }
+                                .font(.system(size: 11.5))
+                                .lineLimit(1).fixedSize()
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(s.description). Open the status page.")
+                        }
                     }
-                    .lineLimit(1)
-                    .fixedSize()
                 }
-                .buttonStyle(ChipButtonStyle())
-                .help(s.description)
             }
         }
     }
@@ -196,147 +280,103 @@ struct PopoverView: View {
 
     private var footer: some View {
         VStack(spacing: 10) {
-            utilityActions
-            navigationActions
+            HStack(spacing: 8) {
+                SleepControlView()
+                Spacer(minLength: 4)
+                workLogButtons
+            }
+            HStack(spacing: 6) {
+                Button {
+                    NotificationCenter.default.post(name: .usageBarOpenDashboard, object: nil)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Open dashboard").font(.system(size: 12.5, weight: .semibold))
+                        Spacer(minLength: 4)
+                        Text("⇧⌘D").font(.system(size: 11, weight: .medium)).opacity(0.55)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(ChipButtonStyle(prominent: true))
+                .help("Overview, work log, history, analysis and settings")
+
+                Button { Task { await store.refreshAll(force: true) } } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .opacity(store.isRefreshing ? 0.4 : 1)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(ChipButtonStyle())
+                .help("Refresh now")
+                .accessibilityLabel("Refresh now")
+
+                moreMenu
+            }
         }
     }
 
-    private var utilityActions: some View {
-        HStack(spacing: 8) {
-            Button { Task { await store.refreshAll(force: true) } } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 12, weight: .semibold))
-                    .opacity(store.isRefreshing ? 0.4 : 1)
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .buttonStyle(ChipButtonStyle())
-            .help("Refresh now. Last: \(Format.relative(store.lastRefresh, now: store.now))")
-
-            Menu {
+    private var moreMenu: some View {
+        Menu {
+            Menu("Refresh every \(Format.interval(settings.refreshInterval))") {
                 ForEach(AppSettings.refreshChoices, id: \.self) { s in
-                    Button { settings.refreshInterval = s } label: {
-                        HStack { Text("Every \(Format.interval(s))"); if s == settings.refreshInterval { Image(systemName: "checkmark") } }
-                    }
+                    Toggle(Format.interval(s), isOn: Binding(get: { settings.refreshInterval == s }, set: { if $0 { settings.refreshInterval = s } }))
                 }
                 Divider()
-                Text("Claude is polled at most every 2 min").font(.caption)
-            } label: {
-                Text(Format.interval(settings.refreshInterval)).font(Theme.smallNumberFont).foregroundStyle(Theme.textSecondary)
+                Text("Claude is polled at most every 2 minutes")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .padding(.horizontal, 10).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.chipFill))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.cardStroke, lineWidth: 1))
-            .help("Refresh interval")
-
-            Button { settings.compactPopover.toggle() } label: {
-                Image(systemName: settings.compactPopover ? "arrow.up.and.down" : "arrow.down.right.and.arrow.up.left")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .buttonStyle(ChipButtonStyle())
-            .help(settings.compactPopover ? "Show details" : "Compact view")
-
-            Spacer(minLength: 0)
-
-            if updates.isEnabled || RenderFlags.isRendering {
-                updateButton
-            }
+            Toggle("Compact view", isOn: $settings.compactPopover)
+            Toggle("Show live sessions", isOn: $settings.showLiveSessions)
+            Divider()
+            Button(updates.isUpdateAvailable ? "Review Update…" : "Check for Updates…") { updates.check() }
+                .disabled(!updates.canCheckForUpdates)
+            Button("Settings…") { NotificationCenter.default.post(name: .usageBarOpenSettings, object: nil) }
+            Divider()
+            Button("Quit UsageBar") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textSecondary)
         }
-    }
-
-    /// Round icon button; a dot on the tray means a newer version is ready to review.
-    private var updateButton: some View {
-        let available = updates.availableVersion ?? (RenderFlags.isRendering ? "preview" : nil)
-        return Button { updates.check() } label: {
-            ZStack(alignment: .topTrailing) {
-                Group {
-                    if updates.phase == .checking {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "square.and.arrow.down").font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(available == nil ? Theme.textSecondary : Theme.textPrimary)
-                            .offset(y: -1)
-                    }
-                }
-                .frame(width: 34, height: 34)
-                if available != nil {
-                    Circle().fill(Theme.textPrimary).frame(width: 7, height: 7)
-                        .overlay(Circle().stroke(Theme.bg, lineWidth: 1.5))
-                        .offset(x: -6, y: 6)
-                }
-            }
-            .background(Circle().fill(Theme.chipFill))
-            .overlay(Circle().stroke(Theme.cardStroke, lineWidth: 1))
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!updates.canCheckForUpdates && !RenderFlags.isRendering)
-        .accessibilityLabel(available.map { "Update to \($0)" } ?? "Check for updates")
-        .help(available.map { "Update \($0) is ready. Review and install it." } ?? "Check for updates")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: 38, height: 32)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill))
+        .help("Refresh interval, view options, updates and quit")
+        .accessibilityLabel("More")
     }
 
     /// Today's work receipt: open it in the dashboard, or copy it straight away.
     private var workLogButtons: some View {
         let today = workLog.receipt(.today(), priced: false)
         let copied = workLog.copiedID == "today"
-        return HStack(spacing: 4) {
+        return HStack(spacing: 1) {
             Button {
-                NotificationCenter.default.post(name: .usageBarOpenWorkLog, object: nil)
+                receiptRange = .today
+                withAnimation(.snappy(duration: 0.2)) { showingReceipt = true }
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "receipt").font(.system(size: 12))
-                    Text("Today").font(.system(size: 12, weight: .semibold))
-                    Text(today.map { Format.hm($0.activeMinutes) } ?? "…").font(Theme.smallNumberFont).foregroundStyle(Theme.textSecondary)
+                    Image(systemName: "receipt").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                    Text("Today").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                    Text(today.map { Format.hm($0.activeMinutes) } ?? "…").font(Theme.readout(14)).foregroundStyle(Theme.textPrimary)
                 }
-                .foregroundStyle(Theme.textPrimary)
                 .fixedSize()
+                .padding(.horizontal, 10).frame(height: 28)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(ChipButtonStyle())
-            .help(today.map { "Today's work log: " + WorkReceiptExport.summary($0, workLog.options) } ?? "Open today's work log")
+            .buttonStyle(.plain)
+            .help(today.map { "Show today's receipt: " + WorkReceiptExport.summary($0, workLog.options) } ?? "Show today's receipt")
+
+            Rectangle().fill(Theme.line).frame(width: 1, height: 16)
 
             Button { workLog.copyToday() } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(copied ? Theme.ok : Theme.textSecondary)
-                    .frame(width: 14, height: 16)
+                    .frame(width: 30, height: 28)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(ChipButtonStyle())
+            .buttonStyle(.plain)
             .accessibilityLabel("Copy today's work receipt")
             .help("Copy today's work receipt as \(settings.workCopyFormat.rawValue.lowercased())")
         }
-    }
-
-    private var navigationActions: some View {
-        HStack(spacing: 8) {
-            Button {
-                NotificationCenter.default.post(name: .usageBarOpenDashboard, object: nil)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.grid.2x2").font(.system(size: 12))
-                    Text("Dashboard").font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "arrow.up.forward").font(.system(size: 10, weight: .semibold))
-                }
-                .foregroundStyle(Theme.textPrimary)
-                .fixedSize()
-            }
-            .buttonStyle(ChipButtonStyle(selected: true))
-            .help("Open the dashboard: overview, history, analysis and settings")
-
-            workLogButtons
-
-            Spacer(minLength: 0)
-
-            Button { NSApp.terminate(nil) } label: {
-                Image(systemName: "power").font(.system(size: 12))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 14, height: 16)
-            }
-            .buttonStyle(ChipButtonStyle())
-            .accessibilityLabel("Quit UsageBar")
-            .help("Quit UsageBar")
-        }
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill))
     }
 }

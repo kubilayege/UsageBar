@@ -16,6 +16,16 @@ enum Format {
         return "\(sec)s"
     }
 
+    /// Coarse duration without seconds: "5d 8h", "4h 7m", "38m", "<1m".
+    static func span(_ seconds: TimeInterval) -> String {
+        let total = Int(max(0, seconds))
+        let d = total / 86400, h = (total % 86400) / 3600, m = (total % 3600) / 60
+        if d > 0 { return h > 0 ? "\(d)d \(h)h" : "\(d)d" }
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
+        if m > 0 { return "\(m)m" }
+        return "<1m"
+    }
+
     static func percent(_ p: Double) -> String {
         "\(Int(p.rounded()))%"
     }

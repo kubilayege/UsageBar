@@ -3,19 +3,20 @@
 A native macOS menu bar app that tracks your AI coding-agent quotas in one place:
 **Claude Code**, **OpenAI Codex**, **Cursor**, **OpenCode**, plus experimental **Gemini CLI** and **Antigravity** support.
 
-- Color-coded 5h / 7d / monthly bars with live countdown timers to the next reset
-- Pace projection ("will I run out before the reset?") with Healthy / Risky / Over verdicts
+- One meter per 5h / 7d / monthly window: the fill is usage, a needle marks how much of the window has passed, and a hatched run shows where the current pace lands at reset
+- A runway headline that answers "when do I get cut off?": the limit you're blocked on, or the one that runs out first at this pace, and how long until then
+- Per-provider verdicts (At limit, Out in 38m, Tight, On pace) in the popup tabs, dashboard sidebar and cards
 - Extra-usage (overage) tracking for Claude and Cursor on-demand spend
 - White menu bar icon by default in every theme; optional usage text with pace indicators
 - Service health chips from each vendor's status page
 - Notifications when you cross 75 / 90 / 100 % and when a window resets
-- Dashboard with a limit-usage trend chart and a GitHub-style activity heatmap built from your local session logs
+- Dashboard with a limit-usage trend chart, an activity heatmap and a weekday profile built from your local session logs
 - Work Log: a daily, weekly or monthly receipt of what your agents worked on, grouped by project, with one-click copy for the whole receipt, a project, or a single session (text, Markdown, CSV, or a receipt image)
 - Live sessions: recent activity and individually identified running sessions, with structured Claude/Codex metadata and 15-second local refreshes
 - Backs off automatically when a vendor rate-limits the usage endpoint, keeping the last good numbers on screen
-- Disable Sleep control in both popup sizes and Settings, backed by `pmset -b disablesleep 1` / `0`
+- Disable Sleep switch in both popup sizes and Settings, backed by `pmset -b disablesleep 1` / `0`
 - Codex banked reset counts, including the number currently applicable
-- Direct Dashboard button and a fixed-size popup with scrolling content; History, Analysis and Settings live in the dashboard sidebar
+- Open Dashboard button and a fixed-size popup with scrolling content; refresh interval, compact view, updates and Quit are in the popup's ••• menu. History, Analysis and Settings live in the dashboard sidebar
 - Usage & effort analysis across a custom 1–120 day range: tokens per assistant turn, model/effort groups, editable API cost estimates and monthly subscription allocation
 - Launch at login and configurable refresh interval
 - Everything stays on your Mac: no accounts, no telemetry, no servers of ours
@@ -47,7 +48,7 @@ swift build && .build/debug/UsageBar          # run without a bundle (no notific
 make preview                                  # render the popover and dashboard to PNG with demo data
 ```
 
-The shared app artwork is [`Sources/UsageBar/Resources/AppLogo.png`](Sources/UsageBar/Resources/AppLogo.png). SwiftPM includes it for development; the workflow embeds it in the bundle and generates the full macOS `AppIcon.icns` size set. The popup, dashboard, and Settings use the same logo, with a simplified white mark in the menu bar. The generation prompt is recorded in [`docs/branding/app-logo.md`](docs/branding/app-logo.md).
+The shared app artwork is [`Sources/UsageBar/Resources/AppLogo.png`](Sources/UsageBar/Resources/AppLogo.png). SwiftPM includes it for development; the workflow embeds it in the bundle and generates the full macOS `AppIcon.icns` size set. The popup, dashboard, and Settings use the same logo, with a simplified white mark in the menu bar. It is drawn by `scripts/render-app-icon.swift`; see [`docs/branding/app-logo.md`](docs/branding/app-logo.md).
 
 Click **Dashboard** in the popup to open Overview, then use the sidebar for History, Analysis and Settings. **⌘,** and the menu bar icon’s right-click menu open Settings in that same window; **Usage → Analyze Usage & Effort…** opens the Analysis page. **Open Dashboard** is also available in the menu bar icon’s right-click menu and the **Usage** menu (**⇧⌘D**). Reopening UsageBar returns to the dashboard overview.
 
@@ -55,7 +56,7 @@ Click **Dashboard** in the popup to open Overview, then use the sidebar for Hist
 
 The **Today** button in the popup opens the dashboard's **Work Log** page. The copy button next to it puts today's receipt on the clipboard in one click. It is also in the menu bar icon's right-click menu and the **Usage** menu; **⇧⌘L** opens the page.
 
-The page reads Claude Code, Codex and OpenCode session logs and groups sessions by repository. Sub-agent sessions count toward their parent session. Each session is named with the agent's own session title, or the files it changed if there is no title. Each session also shows its time span, active time, model, branch, the files it edited, tokens and an estimated API cost. Use the **Day / Week / Month** control and arrows to change the range; week and month views add an active-time-by-day chart.
+The page reads Claude Code, Codex and OpenCode session logs and groups sessions by repository. Sub-agent sessions count toward their parent session. Each session is named with the agent's own session title, or the files it changed if there is no title. Each session also shows its time span, active time, model, branch, the files it edited, tokens and an estimated API cost. Use the **Day / Week / Month** control and arrows to change the range; the day view adds a timeline with one lane per project, marking each minute an agent was working; week and month views add an active-time-by-day chart.
 
 - **Copy receipt** (⇧⌘C) copies the range as plain text or Markdown. Each project and session has its own copy button.
 - **Include** chooses what exports contain: files, times, and tokens & cost (off by default).

@@ -1,35 +1,36 @@
 import SwiftUI
 
+/// Disable Sleep as a switch: the control says what it does, the switch says its state.
 struct SleepControlView: View {
     @ObservedObject private var control = SleepControl.shared
+    var showsError = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button { Task { await control.toggle() } } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "power")
-                        Text("Disable Sleep")
-                        Text(control.stateLabel).fontWeight(.bold).monospacedDigit()
-                            .foregroundStyle(control.isSleepDisabled == true ? Theme.ok : Theme.textMuted)
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textSecondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: control.isSleepDisabled == true ? "cup.and.saucer.fill" : "moon.zzz")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(control.isSleepDisabled == true ? Theme.accent : Theme.textMuted)
+                    .frame(width: 14)
+                Text("Disable sleep").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                if control.isChanging {
+                    ProgressView().controlSize(.mini)
+                } else if control.isSleepDisabled == nil {
+                    Text("unknown").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                 }
-                .buttonStyle(ChipButtonStyle())
-                .disabled(control.isChanging)
-                .help(control.isPasswordless
-                      ? "Runs pmset -b disablesleep 1 or 0 through UsageBar's passwordless sudo rule. macOS reports this as a system-wide setting; it persists after UsageBar quits."
-                      : "Runs pmset -b disablesleep 1 or 0 with macOS administrator approval. Settings can make this passwordless. macOS reports this as a system-wide setting; it persists after UsageBar quits.")
-                Spacer(minLength: 4)
-                Button { Task { await control.refresh() } } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 12))
-                }
-                .buttonStyle(.plain)
-                .disabled(control.isChanging)
-                .help("Read the current macOS sleep setting")
+                Toggle("Disable sleep", isOn: Binding(
+                    get: { control.isSleepDisabled == true },
+                    set: { _ in Task { await control.toggle() } }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                    .disabled(control.isChanging)
             }
-            if let error = control.errorMessage {
+            .help(control.isPasswordless
+                  ? "Runs pmset -b disablesleep 1 or 0 through UsageBar's passwordless sudo rule. macOS reports this as a system-wide setting; it persists after UsageBar quits."
+                  : "Runs pmset -b disablesleep 1 or 0 with macOS administrator approval. Settings can make this passwordless. macOS reports this as a system-wide setting; it persists after UsageBar quits.")
+            if showsError, let error = control.errorMessage {
                 Text(error).font(.system(size: 11)).foregroundStyle(Theme.caution)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -44,18 +45,19 @@ struct SleepAccessRows: View {
     @ObservedObject private var control = SleepControl.shared
 
     var body: some View {
-        Toggle("Change sleep without a password", isOn: Binding(
-            get: { control.isPasswordless },
-            set: { enabled in Task { await control.setPasswordless(enabled) } }))
-            .disabled(control.isChanging)
-        if control.isPasswordless {
-            Toggle("Confirm with Touch ID or password", isOn: $settings.confirmSleepWithTouchID)
+        SettingsRow("Change sleep without a password",
+                    detail: control.isPasswordless
+                        ? "Sleep access is enabled for your account. Confirmation applies to UsageBar; other apps running as your account can also change sleep. Turn this off to remove access."
+                        : "Approve administrator access once, then confirm sleep changes with Touch ID or your login password. This also lets other apps running as your account change sleep without administrator approval.") {
+            Toggle("", isOn: Binding(
+                get: { control.isPasswordless },
+                set: { enabled in Task { await control.setPasswordless(enabled) } }))
                 .disabled(control.isChanging)
         }
-        Text(control.isPasswordless
-             ? "Sleep access is enabled for your account. Confirmation applies to UsageBar; other apps running as your account can also change sleep. Turn this off to remove access."
-             : "Approve administrator access once, then confirm sleep changes with Touch ID or your login password. This also lets other apps running as your account change sleep without administrator approval.")
-            .font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        if control.isPasswordless {
+            SettingsRow("Confirm with Touch ID or password") {
+                Toggle("", isOn: $settings.confirmSleepWithTouchID).disabled(control.isChanging)
+            }
+        }
     }
 }

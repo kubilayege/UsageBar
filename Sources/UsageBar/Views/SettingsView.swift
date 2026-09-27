@@ -5,88 +5,177 @@ struct SettingsView: View {
     @ObservedObject private var updates = UpdateChecker.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Settings")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.textPrimary)
-                Text("Choose what you track and how UsageBar behaves.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.textSecondary)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 28)
-            .padding(.bottom, 8)
+        MaybeScroll {
+            VStack(alignment: .leading, spacing: 26) {
+                PageHeader(title: "Settings", subtitle: "What UsageBar tracks, where it shows it, and when it tells you.")
 
-            Form {
-                Section("Providers") {
+                SettingsSection("Providers") {
                     ForEach(ProviderID.allCases) { id in
-                        Toggle(isOn: Binding(get: { settings.enabledProviders.contains(id) }, set: { _ in settings.toggle(id) })) {
+                        SettingsRow(detail: id.howToConfigure.replacingOccurrences(of: "`", with: "")) {
                             HStack(spacing: 8) {
-                                ProviderDot(id: id, size: 9)
+                                ProviderDot(id: id, size: 8)
                                 Text(id.displayName)
                                 if id.isExperimental { Badge(text: "experimental", color: Theme.textMuted) }
                             }
+                        } control: {
+                            Toggle("", isOn: Binding(get: { settings.enabledProviders.contains(id) }, set: { _ in settings.toggle(id) }))
+                        }
+                    }
+                    if settings.enabledProviders.contains(.opencode) {
+                        SettingsRow("OpenCode daily token budget", detail: "Shows OpenCode as a limit against this many tokens a day. Zero tracks usage without a limit.") {
+                            TextField("0", value: $settings.opencodeDailyTokenBudget, format: .number)
+                                .textFieldStyle(.roundedBorder).frame(width: 110).multilineTextAlignment(.trailing)
                         }
                     }
                 }
-                Section("Refresh") {
-                    Picker("Interval", selection: $settings.refreshInterval) {
-                        ForEach(AppSettings.refreshChoices, id: \.self) { Text(Format.interval($0)).tag($0) }
+
+                SettingsSection("Menu bar") {
+                    SettingsRow("Style", detail: "Icon only keeps the menu bar quiet. The other styles show each provider's usage.") {
+                        Picker("", selection: $settings.menuBarMode) {
+                            ForEach(MenuBarMode.allCases) { Text($0.label).tag($0) }
+                        }
+                        .frame(width: 250)
                     }
-                    Text("Each provider also has a floor (Claude 2 min, Codex and Cursor 1 min). A 429 doubles the wait until a few refreshes succeed. The last good numbers are kept on disk across relaunches.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Menu bar") {
-                    Picker("Style", selection: $settings.menuBarMode) {
-                        ForEach(MenuBarMode.allCases) { Text($0.label).tag($0) }
-                    }
-                    Toggle("Show pace indicator (↗ risky, ⚠︎ over)", isOn: $settings.showPaceInMenuBar)
-                }
-                Section("Notifications") {
-                    Toggle("Enable notifications", isOn: $settings.notificationsEnabled)
-                    Toggle("Crossing 75% / 90% / 100%", isOn: $settings.notifyThresholds).disabled(!settings.notificationsEnabled)
-                    Toggle("Window reset (usage available again)", isOn: $settings.notifyResets).disabled(!settings.notificationsEnabled)
-                    if !AppSettings.isBundled {
-                        Text("Notifications are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
+                    SettingsRow("Show pace warnings", detail: "Adds ↗ when a limit is getting tight and ⚠︎ when it will run out before it resets.") {
+                        Toggle("", isOn: $settings.showPaceInMenuBar)
                     }
                 }
-                Section("Behavior") {
-                    SleepControlView()
+
+                SettingsSection("Popup") {
+                    SettingsRow("Refresh every", detail: "Each provider also has a floor: Claude 2 min, Codex and Cursor 1 min. When a vendor rate-limits UsageBar, it waits longer and keeps the last good numbers on screen.") {
+                        Picker("", selection: $settings.refreshInterval) {
+                            ForEach(AppSettings.refreshChoices, id: \.self) { Text(Format.interval($0)).tag($0) }
+                        }
+                        .pickerStyle(.segmented).frame(width: 200)
+                    }
+                    SettingsRow("Compact view", detail: "Shorter popup without meter projections or service status.") {
+                        Toggle("", isOn: $settings.compactPopover)
+                    }
+                    SettingsRow("Show live sessions", detail: "Agent sessions active in the last 10 minutes, with a button to jump to their terminal.") {
+                        Toggle("", isOn: $settings.showLiveSessions)
+                    }
+                }
+
+                SettingsSection("Notifications") {
+                    SettingsRow("Notifications", detail: AppSettings.isBundled ? nil : "Available in the packaged app.") {
+                        Toggle("", isOn: $settings.notificationsEnabled)
+                    }
+                    SettingsRow("When usage crosses 75%, 90% and 100%") {
+                        Toggle("", isOn: $settings.notifyThresholds).disabled(!settings.notificationsEnabled)
+                    }
+                    SettingsRow("When a limit resets") {
+                        Toggle("", isOn: $settings.notifyResets).disabled(!settings.notificationsEnabled)
+                    }
+                }
+
+                SettingsSection("Sleep") {
+                    SettingsRow("Disable sleep", detail: "Keeps the Mac awake with the lid closed, so long agent runs finish. Uses pmset; the setting stays after UsageBar quits.") {
+                        SleepSwitch()
+                    }
                     SleepAccessRows()
-                    Toggle("Launch at login", isOn: $settings.launchAtLogin).disabled(!AppSettings.isBundled)
-                    Toggle("Compact popover", isOn: $settings.compactPopover)
-                    Toggle("Show live sessions", isOn: $settings.showLiveSessions)
-                    HStack {
-                        Text("OpenCode daily token budget")
-                        Spacer()
-                        TextField("0 = none", value: $settings.opencodeDailyTokenBudget, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-                            .multilineTextAlignment(.trailing)
+                }
+
+                SettingsSection("General") {
+                    SettingsRow("Launch at login", detail: AppSettings.isBundled ? nil : "Available in the packaged app.") {
+                        Toggle("", isOn: $settings.launchAtLogin).disabled(!AppSettings.isBundled)
+                    }
+                    SettingsRow("Usage & effort analysis", detail: "Compare models and reasoning effort over a custom range, with token prices and plan costs you can edit.") {
+                        Button("Open Analysis") { NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil) }
                     }
                 }
-                Section("Usage analysis") {
-                    Button("Analyze usage & effort…") {
-                        NotificationCenter.default.post(name: .usageBarOpenAnalysis, object: nil)
-                    }
-                    Text("Compare models and reasoning effort over a custom time range, with token rates and monthly plan costs you can edit.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Updates") {
-                    UpdateSettingsRows(updates: updates)
-                }
-                Section("Privacy") {
+
+                SettingsSection("Updates") { UpdateSettingsRows(updates: updates) }
+
+                SettingsSection("Privacy") {
                     Text("UsageBar reads the credentials your CLIs already store locally and talks only to each vendor's own usage endpoint, plus GitHub for the LiteLLM price list and update checks. History and activity caches live in ~/Library/Application Support/UsageBar. No telemetry.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 12)
                 }
             }
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .toggleStyle(.switch)
+        .tint(Theme.accent)
+        .labelsHidden()
         .background(Theme.bg)
         .preferredColorScheme(.dark)
+    }
+}
+
+/// The popup's sleep switch without its icon and label, for a Settings row.
+private struct SleepSwitch: View {
+    @ObservedObject private var control = SleepControl.shared
+    var body: some View {
+        HStack(spacing: 8) {
+            if control.isChanging { ProgressView().controlSize(.small) }
+            else if control.isSleepDisabled == nil { Text("Unknown").font(.system(size: 11.5)).foregroundStyle(Theme.textMuted) }
+            Toggle("", isOn: Binding(get: { control.isSleepDisabled == true }, set: { _ in Task { await control.toggle() } }))
+                .disabled(control.isChanging)
+        }
+        .task { if !RenderFlags.isRendering { await control.refresh() } }
+    }
+}
+
+// MARK: - Building blocks
+
+struct SettingsSection<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Legend(title).padding(.leading, 2)
+            _VariadicView.Tree(DividedRows()) { content }
+                .padding(.horizontal, 16)
+                .panel()
+        }
+    }
+}
+
+/// Stacks rows with hairlines between them.
+private struct DividedRows: _VariadicView_MultiViewRoot {
+    func body(children: _VariadicView.Children) -> some View {
+        VStack(spacing: 0) {
+            ForEach(children) { child in
+                if child.id != children.first?.id { Rectangle().fill(Theme.line).frame(height: 1) }
+                child
+            }
+        }
+    }
+}
+
+struct SettingsRow<Title: View, Control: View>: View {
+    var detail: String?
+    @ViewBuilder var title: Title
+    @ViewBuilder var control: Control
+
+    init(detail: String? = nil, @ViewBuilder title: () -> Title, @ViewBuilder control: () -> Control) {
+        self.detail = detail; self.title = title(); self.control = control()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 3) {
+                title.font(.system(size: 13)).foregroundStyle(Theme.textPrimary)
+                if let detail {
+                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            control
+        }
+        .padding(.vertical, 11)
+    }
+}
+
+extension SettingsRow where Title == Text {
+    init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
+        self.init(detail: detail, title: { Text(title) }, control: control)
     }
 }
 
@@ -94,37 +183,31 @@ struct UpdateSettingsRows: View {
     @ObservedObject var updates: UpdateChecker
 
     var body: some View {
-        HStack {
-            Text("Installed version")
-            Spacer()
-            Text(UpdateChecker.currentVersion ?? "development build").foregroundStyle(.secondary).monospacedDigit()
-        }
-        Toggle("Check for updates daily", isOn: Binding(
-            get: { updates.automaticallyChecksForUpdates },
-            set: { updates.setAutomaticChecksEnabled($0) }
-        )).disabled(!updates.isEnabled)
-        HStack {
-            Button(updates.isUpdateAvailable ? "Review Update…" : "Check for Updates…") { updates.check() }
-                .disabled(!updates.canCheckForUpdates)
-            Spacer()
-            if let checked = updates.lastChecked {
-                Text("Checked \(Format.relative(checked))").font(.caption).foregroundStyle(.secondary)
+        SettingsRow("Installed version", detail: statusLine) {
+            HStack(spacing: 10) {
+                Text(UpdateChecker.currentVersion ?? "development build").font(Theme.mono(12)).foregroundStyle(Theme.textSecondary)
+                Button(updates.isUpdateAvailable ? "Review Update…" : "Check for Updates…") { updates.check() }
+                    .disabled(!updates.canCheckForUpdates)
             }
         }
-        if let version = updates.availableVersion {
-            Label("UsageBar \(version) is available", systemImage: "arrow.down.circle.fill")
-                .foregroundStyle(Theme.accent)
-        } else if updates.phase == .noUpdate {
-            Text("No updates available.").font(.caption).foregroundStyle(.secondary)
+        SettingsRow("Check for updates daily", detail: "Updates download securely; UsageBar installs and restarts when you're ready.") {
+            Toggle("", isOn: Binding(
+                get: { updates.automaticallyChecksForUpdates },
+                set: { updates.setAutomaticChecksEnabled($0) }
+            )).disabled(!updates.isEnabled)
         }
-        if case .failed(let message) = updates.phase {
-            Text(message).font(.caption).foregroundStyle(Theme.caution)
+        SettingsRow("Release notes") {
+            Link("View on GitHub", destination: UpdateChecker.releasesPage).font(.system(size: 12)).foregroundStyle(Theme.accent)
         }
-        Text("Download updates securely, then install and restart UsageBar when you’re ready.")
-            .font(.caption).foregroundStyle(.secondary)
-        if !AppSettings.isBundled {
-            Text("Updates are available in the packaged app.").font(.caption).foregroundStyle(.secondary)
-        }
-        Link("Release notes", destination: UpdateChecker.releasesPage).font(.caption)
+    }
+
+    private var statusLine: String? {
+        if let version = updates.availableVersion { return "UsageBar \(version) is available." }
+        if case .failed(let message) = updates.phase { return message }
+        if !AppSettings.isBundled { return "Updates are available in the packaged app." }
+        var parts: [String] = []
+        if updates.phase == .noUpdate { parts.append("You're up to date.") }
+        if let checked = updates.lastChecked { parts.append("Checked \(Format.relative(checked)).") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 }

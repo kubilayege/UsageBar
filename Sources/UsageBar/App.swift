@@ -256,22 +256,22 @@ extension Notification.Name {
 enum MenuBarIcon {
     static func whiteLogo() -> NSImage {
         // Bake white into a non-template image so Aqua cannot recolor it black.
-        // Simplify the app artwork to its bars and sparkle for an 18-point menu item.
+        // The app icon's three meters at 18 points: dim tracks, solid fills, and the needle cut across them.
+        // Fills sit further from the needle than in the icon so each one still reads at this size.
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.white.setFill()
-            for bar in [NSRect(x: 2, y: 2, width: 4, height: 10),
-                        NSRect(x: 7, y: 2, width: 4, height: 7),
-                        NSRect(x: 12, y: 2, width: 4, height: 14)] {
-                NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+            let bottom: CGFloat = 2.5, height: CGFloat = 13
+            for (x, fill) in [(2.5, 0.8), (7.5, 0.22), (12.5, 0.9)] as [(CGFloat, CGFloat)] {
+                NSColor.white.withAlphaComponent(0.38).setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: bottom, width: 3.5, height: height), xRadius: 1, yRadius: 1).fill()
+                NSColor.white.setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: bottom, width: 3.5, height: height * fill), xRadius: 1, yRadius: 1).fill()
             }
-            let sparkle = NSBezierPath()
-            sparkle.move(to: NSPoint(x: 9, y: 15.5))
-            sparkle.curve(to: NSPoint(x: 11, y: 13), controlPoint1: NSPoint(x: 9.4, y: 13.8), controlPoint2: NSPoint(x: 9.7, y: 13.4))
-            sparkle.curve(to: NSPoint(x: 9, y: 10.5), controlPoint1: NSPoint(x: 9.7, y: 12.6), controlPoint2: NSPoint(x: 9.4, y: 12.2))
-            sparkle.curve(to: NSPoint(x: 7, y: 13), controlPoint1: NSPoint(x: 8.6, y: 12.2), controlPoint2: NSPoint(x: 8.3, y: 12.6))
-            sparkle.curve(to: NSPoint(x: 9, y: 15.5), controlPoint1: NSPoint(x: 8.3, y: 13.4), controlPoint2: NSPoint(x: 8.6, y: 13.8))
-            sparkle.close()
-            sparkle.fill()
+            let needleY = bottom + height * 0.52
+            NSGraphicsContext.current?.compositingOperation = .clear
+            NSBezierPath(rect: NSRect(x: 0.5, y: needleY - 1.75, width: 17, height: 3.5)).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 1, y: needleY - 0.75, width: 16, height: 1.5), xRadius: 0.75, yRadius: 0.75).fill()
             return true
         }
         image.isTemplate = false
@@ -353,16 +353,17 @@ enum PreviewRenderer {
             let model = argument("--analysis-model")
             let height = min(6000, max(600, argument("--analysis-height").flatMap(Double.init) ?? 1100))
             if args.contains("--analysis-show-prices") { UsageAnalysisState.shared.previewShowPrices = true }
+            RenderFlags.previewHoverIndex = argument("--analysis-hover").flatMap(Int.init)
             if args.contains("--analysis-skeleton") {
                 render(VStack(alignment: .leading, spacing: 0) { AnalysisSkeleton().padding(28) }
-                    .background(Theme.bg).preferredColorScheme(.dark).frame(width: 1100, height: height), to: args[i + 1])
+                    .background(Theme.bg).preferredColorScheme(.dark).frame(width: 1100, height: height, alignment: .top).clipped(), to: args[i + 1])
                 exit(0)
             }
             let provider = model.flatMap { $0.split(separator: "/").first }.flatMap { ProviderID(rawValue: String($0)) }
             UsageAnalysisState.shared.loadLocalPreview(at: date)
             render(UsageAnalysisView(days: days, provider: provider, model: model,
                                      resolution: args.contains("--analysis-each-turn") ? .turns : .average)
-                .frame(width: 1100, height: height), to: args[i + 1])
+                .frame(width: 1100, height: height, alignment: .top).clipped(), to: args[i + 1])
             exit(0)
         }
         let store = UsageStore.shared
@@ -372,6 +373,16 @@ enum PreviewRenderer {
         if let i = args.firstIndex(of: "--render-preview"), i + 1 < args.count {
             render(PopoverView().environmentObject(store).environmentObject(store.settings), to: args[i + 1])
         }
+        if let i = args.firstIndex(of: "--render-popover-receipt"), i + 1 < args.count {
+            WorkLogState.shared.loadForPreview()
+            render(PopoverView(showingReceipt: true).environmentObject(store).environmentObject(store.settings), to: args[i + 1])
+        }
+        if let i = args.firstIndex(of: "--render-receipt-preview"), i + 1 < args.count {
+            WorkLogState.shared.loadForPreview()
+            if let r = WorkLogState.shared.receipt(WorkReceiptCLI.range(args)) {
+                render(ReceiptPreview(receipt: r, maxPaperHeight: 560).padding(16).frame(width: 400).background(Theme.bg), to: args[i + 1])
+            }
+        }
         if let i = args.firstIndex(of: "--render-compact"), i + 1 < args.count {
             store.settings.compactPopover = true
             render(PopoverView(viewportHeight: 560).environmentObject(store).environmentObject(store.settings), to: args[i + 1])
@@ -379,15 +390,15 @@ enum PreviewRenderer {
         if let i = args.firstIndex(of: "--render-analysis-tab"), i + 1 < args.count {
             store.dashboardTab = .analysis
             UsageAnalysisState.shared.loadLocalPreview(at: Date())
-            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 760), to: args[i + 1])
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 760, alignment: .top).clipped(), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-settings"), i + 1 < args.count {
             store.dashboardTab = .settings
-            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660), to: args[i + 1])
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660, alignment: .top).clipped(), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-dashboard"), i + 1 < args.count {
             store.dashboardTab = .overview
-            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660), to: args[i + 1])
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 660, alignment: .top).clipped(), to: args[i + 1])
         }
         if let i = args.firstIndex(of: "--render-worklog"), i + 1 < args.count {
             // Real local logs: --worklog-range day|week|month, --worklog-date yyyy-MM-dd.
@@ -396,7 +407,7 @@ enum PreviewRenderer {
             store.dashboardTab = .workLog
             let height = min(6000, max(600, WorkReceiptCLI.value("--render-height", args).flatMap(Double.init) ?? 900))
             render(HStack(spacing: 0) { WorkLogView(range: range) }.environmentObject(store).environmentObject(store.settings)
-                .frame(width: 1060, height: height).background(Theme.bg), to: args[i + 1])
+                .frame(width: 1060, height: height, alignment: .top).clipped().background(Theme.bg), to: args[i + 1])
             if let j = args.firstIndex(of: "--render-receipt"), j + 1 < args.count,
                let r = WorkLogState.shared.receipt(range), let image = ReceiptImage.render(r, options: WorkLogState.shared.options),
                let png = ReceiptImage.png(image) {
@@ -407,7 +418,7 @@ enum PreviewRenderer {
         if let i = args.firstIndex(of: "--render-history"), i + 1 < args.count {
             store.dashboardTab = .history
             store.loadRealActivityForPreview()
-            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 760), to: args[i + 1])
+            render(DashboardView().environmentObject(store).environmentObject(store.settings).frame(width: 980, height: 760, alignment: .top).clipped(), to: args[i + 1])
         }
         exit(0)
     }
