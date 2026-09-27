@@ -519,15 +519,21 @@ enum Probe {
     static func runIfRequested() {
         guard CommandLine.arguments.contains("--probe") else { return }
         let skipActivity = CommandLine.arguments.contains("--no-activity")
-        let providers: [any UsageProvider] = [
-            ClaudeProvider(), CodexProvider(), CursorProvider(), GeminiProvider(), AntigravityProvider(), OpenCodeProvider(),
-        ]
+        let accounts = AccountDirectory.discover(AppSettings.shared.accountOptions)
+        var providers: [(String, any UsageProvider)] = []
+        for a in accounts[.claude] ?? [] {
+            providers.append(("Claude [\(a.sourceDescription)]", ClaudeProvider(configDir: a.claudeConfigDir, email: a.email)))
+        }
+        for a in accounts[.codex] ?? [] {
+            providers.append(("Codex [\(a.email ?? "-") · \(a.sourceDescription)]", CodexProvider(credential: a.codex, isSaved: a.source == .saved)))
+        }
+        providers += [("Cursor", CursorProvider()), ("Gemini", GeminiProvider()), ("Antigravity", AntigravityProvider()), ("OpenCode", OpenCodeProvider())]
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            for p in providers {
+            for (name, p) in providers {
                 do {
                     let s = try await p.fetch()
-                    print("✅ \(p.id.displayName)  plan=\(s.planName ?? "-")  account=\(s.accountLabel ?? "-")  note=\(s.note ?? "-")")
+                    print("✅ \(name)  plan=\(s.planName ?? "-")  account=\(s.accountLabel ?? "-")  note=\(s.note ?? "-")")
                     for w in s.windows {
                         let reset = w.resetsAt.map { Format.countdown(to: $0) ?? "" } ?? "-"
                         let proj = w.projectedPercent().map { Format.percent($0) } ?? "-"
@@ -535,9 +541,9 @@ enum Probe {
                     }
                     if let e = s.extraUsage { print("     \(e.title): \(e.detail)") }
                 } catch let e as ProviderError {
-                    print("⚠️  \(p.id.displayName)  [\(e.kind)] \(e.message)")
+                    print("⚠️  \(name)  [\(e.kind)] \(e.message)")
                 } catch {
-                    print("❌ \(p.id.displayName)  \(error)")
+                    print("❌ \(name)  \(error)")
                 }
             }
             let statuses = await StatusPageService.fetchAll(StatusService.allCases)

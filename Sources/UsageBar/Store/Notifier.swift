@@ -17,9 +17,9 @@ final class Notifier {
         }
     }
 
-    func evaluate(old: UsageSnapshot?, new: UsageSnapshot, settings: AppSettings) {
+    /// `name` and `source` identify the account: "Codex · work" and its id.
+    func evaluate(old: UsageSnapshot?, new: UsageSnapshot, name: String, source: String, settings: AppSettings) {
         guard available, settings.notificationsEnabled, let old else { return }
-        let name = new.provider.displayName
         for w in new.windows where w.hasLimit {
             guard let prev = old.windows.first(where: { $0.id == w.id }) else { continue }
             if settings.notifyThresholds {
@@ -27,11 +27,11 @@ final class Notifier {
                     let title = t >= 100 ? "\(name) \(w.label) limit reached" : "\(name) \(w.label) at \(Int(t))%"
                     var body = "Usage is at \(Format.percent(w.percent))."
                     if let c = Format.countdown(to: w.resetsAt) { body += " Resets in \(c)." }
-                    send(id: "\(new.provider.rawValue)-\(w.id)-\(Int(t))", title: title, body: body)
+                    send(id: "\(source)-\(w.id)-\(Int(t))", title: title, body: body)
                 }
             }
             if settings.notifyResets, prev.percent >= 25, w.percent <= 5 {
-                send(id: "\(new.provider.rawValue)-\(w.id)-reset",
+                send(id: "\(source)-\(w.id)-reset",
                      title: "\(name) \(w.label) window reset",
                      body: "Usage dropped from \(Format.percent(prev.percent)) to \(Format.percent(w.percent)). You're good to go.")
             }

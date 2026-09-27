@@ -80,17 +80,29 @@ struct MeterKey: View {
 /// A short verdict for one provider: at limit, runs out soon, tight, or on pace.
 enum ProviderStatus {
     static func of(_ snap: UsageSnapshot, now: Date) -> (text: String, color: Color) {
+        let v = verdict(snap, now: now)
+        return (v.text, v.color)
+    }
+
+    /// The most urgent verdict across several accounts of one provider.
+    static func worst(_ snaps: [UsageSnapshot], now: Date) -> (text: String, color: Color)? {
+        guard let v = snaps.map({ verdict($0, now: now) }).max(by: { $0.rank < $1.rank }) else { return nil }
+        return (v.text, v.color)
+    }
+
+    /// `rank` orders verdicts by urgency; a sooner run-out ranks higher.
+    private static func verdict(_ snap: UsageSnapshot, now: Date) -> (text: String, color: Color, rank: Double) {
         let limited = snap.primaryWindows.filter(\.hasLimit)
-        guard !limited.isEmpty else { return ("Tracking", Theme.textSecondary) }
-        if limited.contains(where: { $0.percent >= 100 }) { return ("At limit", Theme.critical) }
+        guard !limited.isEmpty else { return ("Tracking", Theme.textSecondary, 0) }
+        if limited.contains(where: { $0.percent >= 100 }) { return ("At limit", Theme.critical, 5) }
         if let out = limited.compactMap({ $0.exhaustion(now: now) }).min() {
             let left = out.timeIntervalSince(now)
-            return ("Out in \(Format.span(left))", left < 3600 ? Theme.critical : Theme.warning)
+            return ("Out in \(Format.span(left))", left < 3600 ? Theme.critical : Theme.warning, 4 - left / (left + 86400))
         }
         let worst = limited.map(\.severity).max() ?? .ok
-        if limited.compactMap({ $0.projection(now: now) }).contains(where: { $0 >= 85 }) { return ("Tight", Theme.caution) }
-        if worst >= .warning { return ("\(Format.percent(limited.map(\.percent).max() ?? 0)) used", worst.color) }
-        return ("On pace", Theme.ok)
+        if limited.compactMap({ $0.projection(now: now) }).contains(where: { $0 >= 85 }) { return ("Tight", Theme.caution, 2.5) }
+        if worst >= .warning { return ("\(Format.percent(limited.map(\.percent).max() ?? 0)) used", worst.color, 2) }
+        return ("On pace", Theme.ok, 1)
     }
 }
 

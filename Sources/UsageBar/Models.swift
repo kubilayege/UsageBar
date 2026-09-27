@@ -352,10 +352,12 @@ struct ActivityData: Sendable {
 struct HistoryPoint: Codable, Sendable, Identifiable {
     var t: Date
     var p: ProviderID
+    /// Account key; nil for a provider's only account and for points recorded before accounts existed.
+    var a: String?
     var w: String
     var pct: Double
     var proj: Double?
-    var id: String { "\(p.rawValue)-\(w)-\(t.timeIntervalSince1970)" }
+    var id: String { "\(p.rawValue)-\(a ?? "")-\(w)-\(t.timeIntervalSince1970)" }
 }
 
 // MARK: - Menu bar

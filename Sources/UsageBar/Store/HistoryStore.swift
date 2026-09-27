@@ -24,18 +24,22 @@ final class HistoryStore {
             if let p = try? decoder.decode(HistoryPoint.self, from: line), p.t >= cutoff { loaded.append(p) }
         }
         points = loaded
-        for p in loaded { lastRecorded["\(p.p.rawValue)/\(p.w)"] = p }
+        for p in loaded { lastRecorded[key(p.p, p.a, p.w)] = p }
         // Compact the file if it drifted far from what we kept.
         if loaded.count < data.count / 200 { rewrite() }
     }
 
-    func record(_ snapshot: UsageSnapshot) {
+    private func key(_ provider: ProviderID, _ account: String?, _ window: String) -> String {
+        "\(provider.rawValue)/\(account.map { $0 + "/" } ?? "")\(window)"
+    }
+
+    func record(_ snapshot: UsageSnapshot, account: String? = nil) {
         let now = Date()
         var appended: [HistoryPoint] = []
         for w in snapshot.windows where w.hasLimit {
-            let key = "\(snapshot.provider.rawValue)/\(w.id)"
+            let key = key(snapshot.provider, account, w.id)
             if let last = lastRecorded[key], now.timeIntervalSince(last.t) < 300, abs(last.pct - w.percent) < 1 { continue }
-            let p = HistoryPoint(t: now, p: snapshot.provider, w: w.id, pct: w.percent, proj: w.projectedPercent(now: now))
+            let p = HistoryPoint(t: now, p: snapshot.provider, a: account, w: w.id, pct: w.percent, proj: w.projectedPercent(now: now))
             lastRecorded[key] = p
             appended.append(p)
         }
@@ -56,7 +60,8 @@ final class HistoryStore {
         try? data.write(to: url)
     }
 
-    func series(provider: ProviderID, since: Date) -> [HistoryPoint] {
-        points.filter { $0.p == provider && $0.t >= since }
+    /// `includeUnkeyed` adds points recorded before this provider had several accounts.
+    func series(provider: ProviderID, account: String? = nil, includeUnkeyed: Bool = true, since: Date) -> [HistoryPoint] {
+        points.filter { $0.p == provider && $0.t >= since && ($0.a == account || (includeUnkeyed && $0.a == nil)) }
     }
 }

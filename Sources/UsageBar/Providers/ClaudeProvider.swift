@@ -4,6 +4,9 @@ import Foundation
 /// queries Anthropic's OAuth usage endpoint (the same one the CLI uses for /usage).
 struct ClaudeProvider: UsageProvider {
     let id = ProviderID.claude
+    /// `CLAUDE_CONFIG_DIR` of an extra account; nil reads the default `~/.claude` sign-in.
+    var configDir: String?
+    var email: String?
 
     private struct Creds {
         var token: String
@@ -14,14 +17,17 @@ struct ClaudeProvider: UsageProvider {
 
     private func loadCreds() throws -> Creds {
         var json: JSON?
-        if let s = Keychain.genericPassword(service: "Claude Code-credentials"),
+        if let s = Keychain.genericPassword(service: AccountDirectory.claudeKeychainService(configDir: configDir)),
            let data = s.data(using: .utf8) {
             json = try? JSONSerialization.jsonObject(with: data) as? JSON
         }
         if json == nil {
-            json = Files.readJSON(Files.path(".claude/.credentials.json"))
+            json = Files.readJSON(((configDir ?? Files.path(".claude")) as NSString).appendingPathComponent(".credentials.json"))
         }
         guard let oauth = json?.dict("claudeAiOauth"), let token = oauth.string("accessToken"), !token.isEmpty else {
+            if let configDir {
+                throw ProviderError(.notConfigured, "Sign in with CLAUDE_CONFIG_DIR=\(AccountDirectory.abbreviate(configDir)) claude.")
+            }
             throw ProviderError(.notConfigured, ProviderID.claude.howToConfigure)
         }
         let expires = oauth.double("expiresAt").map { Date(timeIntervalSince1970: $0 / 1000) }
@@ -32,7 +38,7 @@ struct ClaudeProvider: UsageProvider {
     func fetch() async throws -> UsageSnapshot {
         let creds = try loadCreds()
         if let exp = creds.expiresAt, exp < Date().addingTimeInterval(-60) {
-            throw ProviderError(.auth, "Claude token expired — run `claude` once to refresh it")
+            throw ProviderError(.auth, "Claude token expired — run `\(command)` once to refresh it")
         }
         let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
         let (data, resp) = try await HTTP.request(url, headers: [
@@ -42,7 +48,7 @@ struct ClaudeProvider: UsageProvider {
         ])
         switch resp.statusCode {
         case 200: break
-        case 401, 403: throw ProviderError(.auth, "Claude rejected the token (\(resp.statusCode)) — run `claude` to sign in again")
+        case 401, 403: throw ProviderError(.auth, "Claude rejected the token (\(resp.statusCode)) — run `\(command)` to sign in again")
         case 429:
             let retry = resp.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) ?? 120
             throw ProviderError(.rateLimited, "Anthropic asked us to slow down", retryAfter: max(60, retry))
@@ -82,7 +88,11 @@ struct ClaudeProvider: UsageProvider {
             plan = sub.capitalized
         }
 
-        return UsageSnapshot(provider: .claude, windows: windows, planName: plan, accountLabel: nil, extraUsage: extra)
+        return UsageSnapshot(provider: .claude, windows: windows, planName: plan, accountLabel: email, extraUsage: extra)
+    }
+
+    private var command: String {
+        configDir.map { "CLAUDE_CONFIG_DIR=\(AccountDirectory.abbreviate($0)) claude" } ?? "claude"
     }
 
     private func window(_ d: JSON?, id: String, label: String, duration: TimeInterval) -> UsageWindow? {

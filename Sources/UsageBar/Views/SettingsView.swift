@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var store: UsageStore
     @ObservedObject private var updates = UpdateChecker.shared
 
     var body: some View {
@@ -27,6 +28,10 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder).frame(width: 110).multilineTextAlignment(.trailing)
                         }
                     }
+                }
+
+                if settings.enabledProviders.contains(.claude) || settings.enabledProviders.contains(.codex) {
+                    SettingsSection("Accounts") { AccountRows() }
                 }
 
                 SettingsSection("Menu bar") {
@@ -102,6 +107,105 @@ struct SettingsView: View {
         .labelsHidden()
         .background(Theme.bg)
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Every Claude and Codex account UsageBar tracks, with a name field, and the ways to add more.
+private struct AccountRows: View {
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var store: UsageStore
+
+    private var providers: [ProviderID] { [.claude, .codex].filter { settings.enabledProviders.contains($0) } }
+
+    var body: some View {
+        ForEach(providers) { id in
+            ForEach(store.accounts(for: id).filter { $0.key != nil || $0.email != nil }) { account in
+                row(account)
+            }
+        }
+        if settings.enabledProviders.contains(.codex) {
+            SettingsRow("Remember Codex sign-ins", detail: "When codex login switches to another account, keep tracking the previous one until its token expires, usually about ten days later. UsageBar saves only the access token, readable by you alone, in ~/Library/Application Support/UsageBar.") {
+                Toggle("", isOn: Binding(get: { settings.rememberCodexAccounts }, set: { on in
+                    if !on { AccountDirectory.clearVault() }
+                    settings.rememberCodexAccounts = on
+                }))
+            }
+        }
+        SettingsRow("Add an account folder", detail: "For accounts kept in their own folder with CLAUDE_CONFIG_DIR or CODEX_HOME. Folders in your home such as ~/.codex-work are found automatically.") {
+            HStack(spacing: 8) {
+                ForEach(providers) { id in
+                    Button("\(id.displayName) Folder…") { addFolder(id) }
+                }
+            }
+        }
+    }
+
+    private func row(_ account: Account) -> some View {
+        SettingsRow(detail: detail(account)) {
+            HStack(spacing: 8) {
+                ProviderDot(id: account.provider, size: 8)
+                Text(account.provider.displayName)
+                Text(account.email ?? store.label(account)).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle)
+                if account.source == .saved { Badge(text: "saved", color: Theme.textMuted) }
+            }
+        } control: {
+            HStack(spacing: 8) {
+                TextField("Name", text: Binding(
+                    get: { settings.accountNicknames[account.id] ?? "" },
+                    set: { settings.accountNicknames[account.id] = $0.isEmpty ? nil : $0 }
+                ))
+                .textFieldStyle(.roundedBorder).frame(width: 130)
+                .help("Shown instead of the email on cards, tabs and the menu bar")
+                if account.source != .standard {
+                    Button { remove(account) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                        .help(account.source == .saved ? "Forget this saved sign-in" : "Stop tracking this folder")
+                        .accessibilityLabel("Remove \(store.title(account))")
+                } else {
+                    Color.clear.frame(width: 14, height: 1)
+                }
+            }
+        }
+    }
+
+    private func detail(_ a: Account) -> String {
+        var parts = [a.sourceDescription]
+        if let plan = store.snapshot(a)?.planName { parts.append(plan) }
+        if a.source == .saved, let exp = a.codex?.expiresAt {
+            parts.append(exp < store.now ? "sign-in expired \(Format.dateTime(exp))" : "sign-in valid until \(Format.dateTime(exp))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func remove(_ a: Account) {
+        switch a.source {
+        case .standard: break
+        case .saved: store.forgetSavedAccount(a)
+        case .folder(let path):
+            settings.accountNicknames[a.id] = nil
+            if a.provider == .codex, let key = a.key { AccountDirectory.forget(key) }
+            if a.provider == .claude { settings.claudeFolders.removeAll { $0 == path } }
+            else { settings.codexFolders.removeAll { $0 == path } }
+            settings.ignoredAccountFolders.insert(path)
+        }
+    }
+
+    private func addFolder(_ id: ProviderID) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.showsHiddenFiles = true
+        panel.directoryURL = URL(fileURLWithPath: Files.home)
+        panel.message = id == .claude ? "Choose the folder you use as CLAUDE_CONFIG_DIR." : "Choose the folder you use as CODEX_HOME."
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let path = AccountDirectory.normalize(url.path)
+        settings.ignoredAccountFolders.remove(path)
+        if id == .claude {
+            if !settings.claudeFolders.contains(path) { settings.claudeFolders.append(path) }
+        } else if !settings.codexFolders.contains(path) {
+            settings.codexFolders.append(path)
+        }
     }
 }
 

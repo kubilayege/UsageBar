@@ -30,7 +30,7 @@ struct PopoverView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     cards
-                    if !settings.compactPopover && !store.visibleProviders.isEmpty {
+                    if !settings.compactPopover && !store.visibleAccounts.isEmpty {
                         MeterKey().padding(.horizontal, inset).padding(.top, 2).padding(.bottom, 12)
                     }
                     if settings.showLiveSessions { liveSessions.padding(.horizontal, inset).padding(.top, 12) }
@@ -159,7 +159,7 @@ struct PopoverView: View {
     // MARK: Runway
 
     @ViewBuilder private var runway: some View {
-        let r = Runway(store.visibleProviders.compactMap { id in store.snapshot(id).map { (id, $0) } }, now: store.now)
+        let r = Runway(sources: store.runwaySources(store.visibleAccounts), now: store.now)
         if r.lead != nil {
             RunwayView(runway: r, now: store.now, size: settings.compactPopover ? .compact : .popover)
                 .padding(.horizontal, 14).padding(.vertical, settings.compactPopover ? 9 : 13)
@@ -182,7 +182,7 @@ struct PopoverView: View {
 
     private func tab(_ id: ProviderID?, _ title: String) -> some View {
         let selected = store.filter == id
-        let status = id.flatMap { store.snapshot($0) }.map { ProviderStatus.of($0, now: store.now) }
+        let status = id.flatMap { ProviderStatus.worst(store.snapshots($0), now: store.now) }
         return Button { store.filter = id } label: {
             HStack(spacing: 5) {
                 if let status { Circle().fill(status.color).frame(width: 5, height: 5) }
@@ -201,22 +201,22 @@ struct PopoverView: View {
     // MARK: Cards
 
     private var cards: some View {
-        let ids = store.visibleProviders
+        let accounts = store.visibleAccounts
         return VStack(spacing: 0) {
-            if ids.isEmpty {
+            if accounts.isEmpty {
                 Text("Turn on a provider in Settings to start tracking.")
                     .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 28)
             }
-            ForEach(Array(ids.enumerated()), id: \.element) { i, id in
+            ForEach(Array(accounts.enumerated()), id: \.element.id) { i, account in
                 if i > 0 { Rectangle().fill(Theme.line).frame(height: 1).padding(.horizontal, inset) }
-                ProviderCardView(id: id, compact: settings.compactPopover, expanded: false)
+                ProviderCardView(account: account, compact: settings.compactPopover, expanded: false)
                     .padding(.horizontal, inset)
                     .padding(.vertical, settings.compactPopover ? 9 : 12)
                     .contentShape(Rectangle())
                     .contextMenu {
-                        Button("Refresh \(id.displayName)") { Task { await store.refresh(id) } }
-                        Button("Hide \(id.displayName)") { settings.toggle(id) }
+                        Button("Refresh \(store.title(account))") { Task { await store.refresh(account) } }
+                        Button("Hide \(account.provider.displayName)") { settings.toggle(account.provider) }
                     }
             }
         }

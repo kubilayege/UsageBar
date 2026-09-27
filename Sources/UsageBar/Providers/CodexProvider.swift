@@ -1,36 +1,45 @@
 import Foundation
 
-/// OpenAI Codex CLI: reads the ChatGPT OAuth token from ~/.codex/auth.json and asks the
+/// OpenAI Codex CLI: uses a ChatGPT sign-in from an auth.json (see AccountDirectory) and asks the
 /// Codex backend for its rate-limit windows (the same data `codex` shows in /status).
 struct CodexProvider: UsageProvider {
     let id = ProviderID.codex
 
+    /// The sign-in to query; nil explains why `~/.codex/auth.json` has none.
+    var credential: CodexCredential?
+    var isSaved = false
+
     func fetch() async throws -> UsageSnapshot {
-        let path = Files.path(".codex/auth.json")
-        guard let auth = Files.readJSON(path) else {
-            throw ProviderError(.notConfigured, ProviderID.codex.howToConfigure)
-        }
-        guard let tokens = auth.dict("tokens"), let access = tokens.string("access_token"), !access.isEmpty else {
-            if auth.string("OPENAI_API_KEY") != nil {
+        guard let credential else {
+            if Files.readJSON(Files.path(".codex/auth.json"))?.string("OPENAI_API_KEY") != nil {
                 throw ProviderError(.notConfigured, "Codex is using an API key. Sign in with ChatGPT (`codex login`) to see rate limits.")
             }
             throw ProviderError(.notConfigured, ProviderID.codex.howToConfigure)
         }
-        var headers = ["Authorization": "Bearer \(access)"]
-        if let acc = tokens.string("account_id") { headers["ChatGPT-Account-Id"] = acc }
+        if credential.isExpired {
+            let when = credential.expiresAt.map { " on \(Format.dateTime($0))" } ?? ""
+            throw ProviderError(.auth, isSaved
+                ? "This saved sign-in expired\(when). Sign in to \(credential.email ?? "this account") with `codex login` once to refresh it."
+                : "Codex token expired — run `codex` once to refresh it")
+        }
+        var headers = ["Authorization": "Bearer \(credential.accessToken)"]
+        if let acc = credential.accountID { headers["ChatGPT-Account-Id"] = acc }
 
         let url = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
         let (data, resp) = try await HTTP.request(url, headers: headers)
         switch resp.statusCode {
         case 200: break
-        case 401, 403: throw ProviderError(.auth, "Codex token expired — run `codex` once to refresh it")
+        case 401, 403: throw ProviderError(.auth, isSaved
+            ? "Codex no longer accepts this saved sign-in. Sign in to \(credential.email ?? "it") with `codex login` again."
+            : "Codex token expired — run `codex` once to refresh it")
         case 429:
             let retry = resp.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) ?? 120
             throw ProviderError(.rateLimited, "Codex asked us to slow down", retryAfter: max(60, retry))
         default: throw ProviderError(.network, "Codex backend returned HTTP \(resp.statusCode)")
         }
-        let json = try HTTP.jsonObject(data)
-        return try parse(json)
+        var snap = try parse(HTTP.jsonObject(data))
+        snap.accountLabel = snap.accountLabel ?? credential.email
+        return snap
     }
 
     func parse(_ json: JSON) throws -> UsageSnapshot {

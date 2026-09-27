@@ -19,6 +19,7 @@ A native macOS menu bar app that tracks your AI coding-agent quotas in one place
 - Open Dashboard button and a fixed-size popup with scrolling content; refresh interval, compact view, updates and Quit are in the popup's ••• menu. History, Analysis and Settings live in the dashboard sidebar
 - Usage & effort analysis across a custom 1–120 day range: tokens per assistant turn, model/effort groups, editable API cost estimates and monthly subscription allocation
 - Launch at login and configurable refresh interval
+- Several Claude and Codex accounts side by side, each with its own meters, verdict, history and notifications
 - Everything stays on your Mac: no accounts, no telemetry, no servers of ours
 
 ## Install a release
@@ -90,6 +91,14 @@ The first time UsageBar reads the Claude keychain item macOS may ask you to allo
 
 Gemini and Antigravity are implemented from public knowledge of those tools but were not verified against a signed-in install; expect rough edges. Refreshing an expired Gemini token needs the Gemini CLI's OAuth client, which is not in this repository: UsageBar reads it from an installed Gemini CLI (`oauth2.js`) or from `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET`; otherwise it asks you to run `gemini` again.
 
+## Multiple accounts
+
+Claude and Codex can show more than one account. With a single account per provider nothing changes; with several, each gets its own card, sidebar row, runway entry and menu bar segment (`X`, `X2`, …). Name accounts in **Settings → Accounts**; otherwise the part of the email before the @ is used.
+
+- **Codex, switching with `codex login`:** UsageBar remembers each ChatGPT sign-in it sees in `auth.json`, so the previous account keeps its meters after you switch. It saves only the access token, never the refresh token, and never refreshes it. A saved account works until that token expires (about ten days after Codex last refreshed it); then sign in to it once more. Turn this off with **Remember Codex sign-ins**, which also deletes what was saved.
+- **Separate folders:** accounts kept in their own `CODEX_HOME` or `CLAUDE_CONFIG_DIR` are picked up from home folders such as `~/.codex-work` or `~/.claude-personal`, or add any folder in **Settings → Accounts**. For Claude, the token is read from the keychain item Claude Code uses for that folder (`Claude Code-credentials-<hash>`), falling back to `<folder>/.credentials.json`.
+- The same sign-in found in two places counts once.
+
 ## Where data lives
 
 `~/Library/Application Support/UsageBar/`
@@ -98,6 +107,7 @@ Gemini and Antigravity are implemented from public knowledge of those tools but 
 - `activity-cache.json` — per-file token counts parsed from Claude Code / Codex session logs
 - `worklog-cache.json` — per-file session timing, titles, relative paths of edited files and token counts for the Work Log; no prompt or response text
 - `analysis-cache.json` — numerical turn usage and model/effort metadata; no prompt or response text
+- `codex-accounts.json` — remembered Codex sign-ins (email, plan, access token and its expiry), readable only by your user; delete an entry from **Settings → Accounts**
 - `model-prices.json` — the last LiteLLM price list downloaded from GitHub (optional; the app ships with a snapshot)
 
 ## Sleep control

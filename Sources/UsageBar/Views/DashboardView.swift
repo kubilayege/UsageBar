@@ -88,11 +88,12 @@ struct DashboardView: View {
             }
 
             Legend("Providers").padding(.top, 22).padding(.bottom, 6).padding(.leading, 8)
-            ForEach(settings.orderedEnabledProviders) { id in
-                let status = providerStatus(id)
+            ForEach(store.enabledAccounts) { account in
+                let status = providerStatus(account)
                 HStack(spacing: 8) {
-                    ProviderDot(id: id, size: 6)
-                    Text(id.displayName).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                    ProviderDot(id: account.provider, size: 6)
+                    Text(store.title(account)).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
                     Spacer(minLength: 4)
                     Text(status.text).font(.system(size: 11, weight: .medium)).foregroundStyle(status.color).lineLimit(1)
                 }
@@ -120,8 +121,8 @@ struct DashboardView: View {
         .padding(.horizontal, 12).padding(.bottom, 14)
     }
 
-    private func providerStatus(_ id: ProviderID) -> (text: String, color: Color) {
-        let state = store.state(id)
+    private func providerStatus(_ account: Account) -> (text: String, color: Color) {
+        let state = store.state(account)
         if let snap = state.snapshot { return ProviderStatus.of(snap, now: store.now) }
         if case .notConfigured = state { return ("Not set up", Theme.textMuted) }
         if state.errorMessage != nil { return ("Error", Theme.caution) }
@@ -153,7 +154,7 @@ struct OverviewTab: View {
     }
 
     @ViewBuilder private var runway: some View {
-        let r = Runway(settings.orderedEnabledProviders.compactMap { id in store.snapshot(id).map { (id, $0) } }, now: store.now)
+        let r = Runway(sources: store.runwaySources(store.enabledAccounts), now: store.now)
         if r.lead != nil {
             RunwayView(runway: r, now: store.now, size: .dashboard)
                 .padding(.horizontal, 22).padding(.vertical, 20)
@@ -162,26 +163,26 @@ struct OverviewTab: View {
     }
 
     private var providerGrid: some View {
-        let ids = settings.orderedEnabledProviders
+        let accounts = store.enabledAccounts
         return VStack(alignment: .leading, spacing: 14) {
-            ForEach(Array(stride(from: 0, to: ids.count, by: 2)), id: \.self) { i in
+            ForEach(Array(stride(from: 0, to: accounts.count, by: 2)), id: \.self) { i in
                 HStack(alignment: .top, spacing: 14) {
-                    providerPanel(ids[i])
-                    if i + 1 < ids.count { providerPanel(ids[i + 1]) } else { Color.clear.frame(maxWidth: .infinity) }
+                    providerPanel(accounts[i])
+                    if i + 1 < accounts.count { providerPanel(accounts[i + 1]) } else { Color.clear.frame(maxWidth: .infinity) }
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
-            if !ids.isEmpty { MeterKey().padding(.leading, 2) }
+            if !accounts.isEmpty { MeterKey().padding(.leading, 2) }
         }
     }
 
-    private func providerPanel(_ id: ProviderID) -> some View {
-        ProviderCardView(id: id, expanded: true)
+    private func providerPanel(_ account: Account) -> some View {
+        ProviderCardView(account: account, expanded: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(16)
             .panel()
             .contextMenu {
-                Button("Refresh \(id.displayName)") { Task { await store.refresh(id) } }
+                Button("Refresh \(store.title(account))") { Task { await store.refresh(account) } }
             }
     }
 
@@ -240,8 +241,14 @@ struct HistoryTab: View {
     @EnvironmentObject var store: UsageStore
     @EnvironmentObject var settings: AppSettings
     @State private var range: HistoryRange = .week
-    @State private var provider: ProviderID = .claude
+    /// An `Account.id`.
+    @State private var accountID: String = ProviderID.claude.rawValue
     @State private var activityProvider: ProviderID? = nil
+
+    private var account: Account {
+        store.enabledAccounts.first { $0.id == accountID } ?? store.enabledAccounts.first ?? Account(provider: .claude, key: nil, source: .standard)
+    }
+    private var provider: ProviderID { account.provider }
 
     private var since: Date { store.now.addingTimeInterval(-range.seconds) }
 
@@ -258,12 +265,14 @@ struct HistoryTab: View {
             }
             .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
         }
-        .onAppear { if !settings.enabledProviders.contains(provider), let f = settings.orderedEnabledProviders.first { provider = f } }
+        .onAppear { if !store.enabledAccounts.contains(where: { $0.id == accountID }), let f = store.enabledAccounts.first { accountID = f.id } }
     }
 
     // Trend of limit usage from the local history log.
     private var trendSection: some View {
-        let points = store.history.series(provider: provider, since: since)
+        // Points from before accounts existed belong to the provider's first account.
+        let points = store.history.series(provider: provider, account: account.key,
+                                          includeUnkeyed: store.accounts(for: provider).first == account, since: since)
         let windows = Array(NSOrderedSet(array: points.map(\.w))) as? [String] ?? []
         return Card {
             VStack(alignment: .leading, spacing: 14) {
@@ -276,10 +285,10 @@ struct HistoryTab: View {
                             Text(w).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
                         }
                     }
-                    Picker("", selection: $provider) {
-                        ForEach(settings.orderedEnabledProviders) { Text($0.displayName).tag($0) }
+                    Picker("", selection: $accountID) {
+                        ForEach(store.enabledAccounts) { Text(store.title($0)).tag($0.id) }
                     }
-                    .labelsHidden().frame(width: 130)
+                    .labelsHidden().frame(width: store.enabledAccounts.count > settings.enabledProviders.count ? 210 : 130)
                 }
                 if points.count < 2 {
                     Text("History builds up while UsageBar runs. Check back after a few refreshes.")

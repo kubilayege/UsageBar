@@ -39,6 +39,15 @@ final class AppSettings: ObservableObject {
     @Published var workExportFiles: Bool { didSet { d.set(workExportFiles, forKey: "workExportFiles") } }
     @Published var workExportTimes: Bool { didSet { d.set(workExportTimes, forKey: "workExportTimes") } }
     @Published var workExportUsage: Bool { didSet { d.set(workExportUsage, forKey: "workExportUsage") } }
+    /// Extra config folders (CLAUDE_CONFIG_DIR / CODEX_HOME) added in Settings.
+    @Published var claudeFolders: [String] { didSet { d.set(claudeFolders, forKey: "claudeFolders") } }
+    @Published var codexFolders: [String] { didSet { d.set(codexFolders, forKey: "codexFolders") } }
+    /// Folders found automatically that the user removed.
+    @Published var ignoredAccountFolders: Set<String> { didSet { d.set(ignoredAccountFolders.sorted(), forKey: "ignoredAccountFolders") } }
+    /// Keep tracking a Codex account after `codex login` switches to another one.
+    @Published var rememberCodexAccounts: Bool { didSet { d.set(rememberCodexAccounts, forKey: "rememberCodexAccounts") } }
+    /// Names shown instead of the email, keyed by account id.
+    @Published var accountNicknames: [String: String] { didSet { d.set(accountNicknames, forKey: "accountNicknames") } }
 
     init(defaults: UserDefaults = .standard) {
         d = defaults
@@ -61,6 +70,16 @@ final class AppSettings: ObservableObject {
         workExportFiles = d.object(forKey: "workExportFiles") as? Bool ?? true
         workExportTimes = d.object(forKey: "workExportTimes") as? Bool ?? true
         workExportUsage = d.bool(forKey: "workExportUsage")
+        claudeFolders = d.stringArray(forKey: "claudeFolders") ?? []
+        codexFolders = d.stringArray(forKey: "codexFolders") ?? []
+        ignoredAccountFolders = Set(d.stringArray(forKey: "ignoredAccountFolders") ?? [])
+        rememberCodexAccounts = d.object(forKey: "rememberCodexAccounts") as? Bool ?? true
+        accountNicknames = d.dictionary(forKey: "accountNicknames") as? [String: String] ?? [:]
+    }
+
+    var accountOptions: AccountDirectory.Options {
+        AccountDirectory.Options(claudeFolders: claudeFolders, codexFolders: codexFolders, ignoredFolders: ignoredAccountFolders,
+                                 rememberCodex: rememberCodexAccounts, nicknames: accountNicknames)
     }
 
     var orderedEnabledProviders: [ProviderID] {

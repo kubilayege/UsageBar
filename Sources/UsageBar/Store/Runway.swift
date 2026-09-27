@@ -27,8 +27,17 @@ struct Runway: Equatable {
         static func < (a: Kind, b: Kind) -> Bool { a.rawValue < b.rawValue }
     }
 
+    /// One account's latest numbers. `title` names it in sentences: "Codex" or "Codex · work".
+    struct Source {
+        var id: String
+        var title: String
+        var snapshot: UsageSnapshot
+    }
+
     struct Item: Equatable, Identifiable {
         var provider: ProviderID
+        var source: String
+        var title: String
         var window: UsageWindow
         var kind: Kind
         /// Blocked: until reset. Runs out: until exhaustion. Clear: until reset.
@@ -36,8 +45,8 @@ struct Runway: Equatable {
         /// Runs out only: time between exhaustion and reset.
         var gap: TimeInterval?
         var projected: Double?
-        var id: String { provider.rawValue + "/" + window.id }
-        var name: String { "\(provider.displayName) \(window.label)" }
+        var id: String { source + "/" + window.id }
+        var name: String { "\(title) \(window.label)" }
     }
 
     var items: [Item]
@@ -45,18 +54,26 @@ struct Runway: Equatable {
     var alerts: [Item] { items.filter { $0.kind != .clear } }
 
     init(_ snapshots: [(ProviderID, UsageSnapshot)], now: Date = Date()) {
+        self.init(sources: snapshots.map { Source(id: $0.0.rawValue, title: $0.0.displayName, snapshot: $0.1) }, now: now)
+    }
+
+    init(sources: [Source], now: Date = Date()) {
         var items: [Item] = []
-        for (id, snap) in snapshots {
+        for source in sources {
+            let snap = source.snapshot
+            func item(_ w: UsageWindow, _ kind: Kind, _ remaining: TimeInterval?, gap: TimeInterval? = nil, projected: Double? = nil) -> Item {
+                Item(provider: snap.provider, source: source.id, title: source.title, window: w, kind: kind,
+                     remaining: remaining, gap: gap, projected: projected)
+            }
             for w in snap.primaryWindows where w.hasLimit {
                 let untilReset = w.resetsAt.map { max(0, $0.timeIntervalSince(now)) }
                 if w.percent >= 100 {
-                    items.append(Item(provider: id, window: w, kind: .blocked, remaining: untilReset, gap: nil, projected: nil))
+                    items.append(item(w, .blocked, untilReset))
                 } else if let out = w.exhaustion(now: now) {
                     let left = max(0, out.timeIntervalSince(now))
-                    items.append(Item(provider: id, window: w, kind: .runsOut, remaining: left,
-                                      gap: untilReset.map { max(0, $0 - left) }, projected: w.projection(now: now)))
+                    items.append(item(w, .runsOut, left, gap: untilReset.map { max(0, $0 - left) }, projected: w.projection(now: now)))
                 } else if let projected = w.projection(now: now) {
-                    items.append(Item(provider: id, window: w, kind: .clear, remaining: untilReset, gap: nil, projected: projected))
+                    items.append(item(w, .clear, untilReset, projected: projected))
                 }
             }
         }

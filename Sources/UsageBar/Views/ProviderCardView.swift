@@ -1,14 +1,17 @@
 import SwiftUI
 
-/// One provider: a header with its verdict, then one meter per window.
+/// One account: a header with its verdict, then one meter per window.
 struct ProviderCardView: View {
     @EnvironmentObject var store: UsageStore
-    var id: ProviderID
+    var account: Account
     var compact = false
     /// Dashboard layout: secondary windows, taller meters and a details footer.
     var expanded = false
 
-    private var state: ProviderState { store.state(id) }
+    private var id: ProviderID { account.provider }
+    /// Only named when the provider has several accounts; otherwise the card looks as it always has.
+    private var accountName: String? { store.hasSeveralAccounts(id) ? store.label(account) : nil }
+    private var state: ProviderState { store.state(account) }
     private var snapshot: UsageSnapshot? { state.snapshot }
     private var labelWidth: CGFloat { expanded ? 58 : 46 }
 
@@ -33,6 +36,14 @@ struct ProviderCardView: View {
             Text(id.displayName)
                 .font(.system(size: expanded ? 15 : 13.5, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
+                .layoutPriority(1)
+            if let accountName {
+                Text(accountName)
+                    .font(.system(size: expanded ? 13 : 12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(account.email.map { "\($0) · \(account.sourceDescription)" } ?? account.sourceDescription)
+            }
             if let plan = snapshot?.planName {
                 Text(plan).font(.system(size: 12)).foregroundStyle(Theme.textMuted).lineLimit(1)
             }
@@ -57,7 +68,7 @@ struct ProviderCardView: View {
         }
         .help(help(w))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(id.displayName) \(w.label)")
+        .accessibilityLabel("\(store.title(account)) \(w.label)")
         .accessibilityValue(help(w))
     }
 
@@ -204,11 +215,12 @@ struct ProviderCardView: View {
     private func footer(_ snap: UsageSnapshot) -> some View {
         HStack(spacing: 6) {
             if let reset = snap.primaryWindows.compactMap(\.resetsAt).min() {
-                Text("Next reset \(Format.dateTime(reset))")
+                Text("Next reset \(Format.dateTime(reset))").layoutPriority(1)
             }
             if let note = snap.note { Text("· \(note)") }
             Spacer(minLength: 8)
-            if let acct = snap.accountLabel { Text(acct).lineLimit(1).truncationMode(.middle) ; Text("·") }
+            // With several accounts the header already names this one; its email is in the header tooltip.
+            if accountName == nil, let acct = snap.accountLabel { Text(acct).lineLimit(1).truncationMode(.middle) ; Text("·") }
             Text("Updated \(Format.relative(snap.fetchedAt, now: store.now))")
         }
         .font(.system(size: 11))
