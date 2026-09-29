@@ -177,7 +177,7 @@ enum UsageAnalysisScanner {
     }
 
     private static func openCode(since: Date) -> [AnalysisTurn] {
-        guard let db = try? SQLiteDB(copyOf: Files.path(".local/share/opencode/opencode.db")),
+        guard let db = try? SQLiteDB(path: Files.path(".local/share/opencode/opencode.db")),
               let rows = try? db.query("select id, data from message where time_created >= \(Int(since.timeIntervalSince1970 * 1000))") else { return [] }
         return rows.compactMap { row in
             guard row.count == 2, let id = row[0], let raw = row[1]?.data(using: .utf8),

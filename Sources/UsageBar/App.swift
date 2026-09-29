@@ -127,13 +127,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             .store(in: &cancellables)
     }
 
-    func popoverWillShow(_ notification: Notification) {
-        store.refreshLiveSessions()
-        WorkLogState.shared.scan(ifOlderThan: 60)
-        Task { await store.sleepControl.refresh() }
-    }
+    func popoverWillShow(_ notification: Notification) { store.setPopoverShown(true) }
 
-    func popoverDidClose(_ notification: Notification) { updateTitle() }
+    func popoverDidClose(_ notification: Notification) {
+        store.setPopoverShown(false)
+        updateTitle()
+    }
     func popoverShouldDetach(_ popover: NSPopover) -> Bool { false }
 
     private func sizePopover() {
@@ -283,7 +282,7 @@ enum MenuBarIcon {
 // MARK: - Dashboard window
 
 @MainActor
-final class DashboardWindowController {
+final class DashboardWindowController: NSObject, NSWindowDelegate {
     static let shared = DashboardWindowController()
     private var window: NSWindow?
 
@@ -291,8 +290,7 @@ final class DashboardWindowController {
         let store = UsageStore.shared
         store.dashboardTab = tab
         if window == nil {
-            let host = NSHostingController(rootView: DashboardView().environmentObject(store).environmentObject(store.settings))
-            let w = NSWindow(contentViewController: host)
+            let w = NSWindow(contentViewController: makeHost())
             w.title = "UsageBar Dashboard"
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             w.titlebarAppearsTransparent = true
@@ -304,13 +302,43 @@ final class DashboardWindowController {
             w.minSize = NSSize(width: 960, height: 600)
             w.center()
             w.setFrameAutosaveName("UsageBarDashboard")
+            w.delegate = self
             window = w
+        } else if let w = window, w.contentViewController == nil {
+            let frame = w.frame
+            w.contentViewController = makeHost()
+            w.setFrame(frame, display: false)
         }
         window?.deminiaturize(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        store.refreshLiveSessions()
-        Task { await store.sleepControl.refresh() }
+        store.setDashboardPresence(.focused)
+    }
+
+    // A dashboard that is closed, minimized, or hidden behind other windows does no UI work.
+    func windowDidChangeOcclusionState(_ notification: Notification) { updatePresence() }
+    func windowDidBecomeKey(_ notification: Notification) { updatePresence() }
+    func windowDidResignKey(_ notification: Notification) { updatePresence() }
+
+    /// Drop the view tree on close so charts and pages stop re-rendering behind a closed window.
+    func windowWillClose(_ notification: Notification) {
+        UsageStore.shared.setDashboardPresence(.hidden)
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.window, !window.isVisible else { return }
+            window.contentViewController = nil
+        }
+    }
+
+    private func makeHost() -> NSViewController {
+        let store = UsageStore.shared
+        return NSHostingController(rootView: DashboardView().environmentObject(store).environmentObject(store.settings))
+    }
+
+    private func updatePresence() {
+        guard let window else { return }
+        let presence: UsageStore.Presence = !window.isVisible || !window.occlusionState.contains(.visible)
+            ? .hidden : (window.isKeyWindow ? .focused : .background)
+        UsageStore.shared.setDashboardPresence(presence)
     }
 }
 

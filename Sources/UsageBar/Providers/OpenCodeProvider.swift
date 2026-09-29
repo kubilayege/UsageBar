@@ -13,7 +13,7 @@ struct OpenCodeProvider: UsageProvider {
         guard Files.exists(dbPath) else {
             throw ProviderError(.notConfigured, ProviderID.opencode.howToConfigure)
         }
-        let db = try SQLiteDB(copyOf: dbPath)
+        let db = try SQLiteDB(path: dbPath)
         let cal = Calendar.current
         let now = Date()
         let startOfDay = cal.startOfDay(for: now)

@@ -13,7 +13,7 @@ struct CursorProvider: UsageProvider {
         guard Files.exists(dbPath) else {
             throw ProviderError(.notConfigured, ProviderID.cursor.howToConfigure)
         }
-        let db = try SQLiteDB(copyOf: dbPath)
+        let db = try SQLiteDB(path: dbPath)
         guard let token = try db.scalar("select value from ItemTable where key='cursorAuth/accessToken'"), !token.isEmpty else {
             throw ProviderError(.notConfigured, "Cursor is not signed in.")
         }

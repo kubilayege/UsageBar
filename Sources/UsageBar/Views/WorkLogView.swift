@@ -13,15 +13,18 @@ final class WorkLogState: ObservableObject {
     /// Id of the item whose copy button last succeeded, for a brief checkmark.
     @Published var copiedID: String?
 
+    private var scanTask: Task<Void, Never>?
+
     private init() {}
 
     func scan(ifOlderThan age: TimeInterval = 0) {
-        guard !isScanning else { return }
+        guard scanTask == nil else { return }
         if let data, Date().timeIntervalSince(data.scannedAt) < age { return }
         isScanning = true
-        Task {
+        scanTask = Task {
             data = await Task.detached(priority: .utility) { WorkLogScanner.scan() }.value
             isScanning = false
+            scanTask = nil
         }
     }
 
@@ -51,9 +54,13 @@ final class WorkLogState: ObservableObject {
         flash(id)
     }
 
+    /// Logs are only scanned while a window is open, so a stale copy is rescanned first.
     func copyToday() {
-        guard let receipt = receipt(.today()) else { scan(); return }
-        copy(receipt, id: "today")
+        Task {
+            scan(ifOlderThan: 60)
+            await scanTask?.value
+            if let receipt = receipt(.today()) { copy(receipt, id: "today") }
+        }
     }
 
     func copyImage(_ receipt: WorkReceipt, id: String = "image") {

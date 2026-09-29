@@ -238,7 +238,7 @@ enum WorkLogScanner {
     // MARK: OpenCode
 
     private static func openCode(since: Date) -> [WorkSession] {
-        guard let db = try? SQLiteDB(copyOf: Files.path(".local/share/opencode/opencode.db")) else { return [] }
+        guard let db = try? SQLiteDB(path: Files.path(".local/share/opencode/opencode.db")) else { return [] }
         let ms = Int(since.timeIntervalSince1970 * 1000)
         guard let sessions = try? db.query("select id, parent_id, directory, title from session where time_updated >= \(ms)") else { return [] }
         var parent: [String: String] = [:], builders: [String: Builder] = [:]

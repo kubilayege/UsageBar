@@ -109,7 +109,7 @@ enum LiveSessionScanner {
 
     private static func openCodeSessions(since cutoff: Date, running: Bool) -> [LiveSession] {
         let path = Files.path(".local/share/opencode/opencode.db")
-        guard Files.exists(path), let db = try? SQLiteDB(copyOf: path) else { return [] }
+        guard Files.exists(path), let db = try? SQLiteDB(path: path) else { return [] }
         let ms = Int(cutoff.timeIntervalSince1970 * 1000)
         guard let rows = try? db.query("""
             select id, directory, title, model, time_updated, tokens_input + tokens_cache_read + tokens_cache_write

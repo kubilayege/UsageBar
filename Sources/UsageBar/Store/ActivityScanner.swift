@@ -120,7 +120,7 @@ enum ActivityScanner {
 
     private static func openCodeActivity(since: Date) -> ([String: DayCount], [String: Double])? {
         let path = Files.path(".local/share/opencode/opencode.db")
-        guard let db = try? SQLiteDB(copyOf: path) else { return nil }
+        guard let db = try? SQLiteDB(path: path) else { return nil }
         let ms = Int(since.timeIntervalSince1970 * 1000)
         guard let rows = try? db.query("select data from message where time_created >= \(ms) and data like '%\"role\":\"assistant\"%'") else { return nil }
         var days: [String: DayCount] = [:]

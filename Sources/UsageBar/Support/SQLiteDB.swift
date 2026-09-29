@@ -1,28 +1,54 @@
 import Foundation
 import SQLite3
 
-/// Read-only SQLite access on a private copy of the database (including WAL/SHM),
-/// so we never contend with the owning application.
+/// Read-only SQLite access. Opens the database in place (a WAL reader never blocks the owning
+/// application), and only falls back to a private copy (including WAL/SHM) when that fails.
+/// Cursor's and OpenCode's databases run to hundreds of MB, so copying them on every read cost
+/// far more disk I/O and energy than anything else UsageBar does.
 final class SQLiteDB {
     private var db: OpaquePointer?
-    private let tempDir: URL
+    private var tempDir: URL?
 
-    init(copyOf path: String) throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: path) else {
+    init(path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else {
             throw ProviderError(.notConfigured, "Database not found: \((path as NSString).abbreviatingWithTildeInPath)")
         }
-        tempDir = fm.temporaryDirectory.appendingPathComponent("usagebar-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        if let handle = Self.open(path, flags: SQLITE_OPEN_READONLY) {
+            db = handle
+            return
+        }
+        try openCopy(of: path)
+    }
+
+    /// Returns a handle only once the schema is readable, so a locked or unreadable file falls back to a copy.
+    private static func open(_ path: String, flags: Int32) -> OpaquePointer? {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
+            sqlite3_close(handle)
+            return nil
+        }
+        sqlite3_busy_timeout(handle, 500)
+        guard sqlite3_exec(handle, "select count(*) from sqlite_master", nil, nil, nil) == SQLITE_OK else {
+            sqlite3_close(handle)
+            return nil
+        }
+        return handle
+    }
+
+    private func openCopy(of path: String) throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("usagebar-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        tempDir = dir
         let name = (path as NSString).lastPathComponent
         for suffix in ["", "-wal", "-shm"] {
             let src = path + suffix
             if fm.fileExists(atPath: src) {
-                try fm.copyItem(atPath: src, toPath: tempDir.appendingPathComponent(name + suffix).path)
+                try fm.copyItem(atPath: src, toPath: dir.appendingPathComponent(name + suffix).path)
             }
         }
         var handle: OpaquePointer?
-        let rc = sqlite3_open_v2(tempDir.appendingPathComponent(name).path, &handle, SQLITE_OPEN_READWRITE, nil)
+        let rc = sqlite3_open_v2(dir.appendingPathComponent(name).path, &handle, SQLITE_OPEN_READWRITE, nil)
         guard rc == SQLITE_OK, let handle else {
             throw ProviderError(.parse, "Cannot open database (\(rc))")
         }
@@ -31,7 +57,7 @@ final class SQLiteDB {
 
     deinit {
         if let db { sqlite3_close(db) }
-        try? FileManager.default.removeItem(at: tempDir)
+        if let tempDir { try? FileManager.default.removeItem(at: tempDir) }
     }
 
     func query(_ sql: String) throws -> [[String?]] {

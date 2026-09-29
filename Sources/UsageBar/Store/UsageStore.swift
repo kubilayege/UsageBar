@@ -29,6 +29,10 @@ final class UsageStore: ObservableObject {
     private var activityTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
     private var started = false
+    private var popoverShown = false
+    private var dashboardPresence = Presence.hidden
+    private var statusesFetchedAt: Date?
+    private var isScanningActivity = false
 
     /// Rate-limit hygiene: each account has a floor on how often we hit its endpoint,
     /// and a 429 doubles that floor (up to 16x) until a few refreshes succeed again.
@@ -90,33 +94,89 @@ final class UsageStore: ObservableObject {
             DispatchQueue.main.async { self?.reloadAccounts() }
         }.store(in: &cancellables)
 
-        clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.now = Date() }
-        }
-        liveTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshLiveSessions()
-                await self?.sleepControl.refresh()
-            }
-        }
-        refreshLiveSessions()
         scheduleRefreshTimer()
         Task { await refreshAll() }
-        scanActivity()
-        WorkLogState.shared.scan()
-        activityTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.scanActivity()
-                WorkLogState.shared.scan()
-            }
-        }
     }
 
     private func scheduleRefreshTimer() {
         refreshTimer?.invalidate()
-        let interval = TimeInterval(max(10, settings.refreshInterval))
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in await self?.refreshAll() }
+        refreshTimer = repeating(TimeInterval(max(10, settings.refreshInterval))) { await $0.refreshAll() }
+    }
+
+    /// Tolerance lets macOS coalesce these wakeups with other timers instead of waking the CPU for each.
+    private func repeating(_ interval: TimeInterval, _ body: @escaping @MainActor (UsageStore) async -> Void) -> Timer {
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in if let self { await body(self) } }
+        }
+        timer.tolerance = interval * 0.2
+        return timer
+    }
+
+    // MARK: Visibility
+
+    /// Only the provider refresh (menu bar, history, alerts) runs in the background. The clock,
+    /// live sessions, sleep state, log scans and status pages feed the popover and dashboard only,
+    /// so they run while one of those is on screen.
+    enum Presence { case hidden, background, focused }
+
+    var isUIVisible: Bool { popoverShown || dashboardPresence != .hidden }
+
+    func setPopoverShown(_ shown: Bool) {
+        guard shown != popoverShown else { return }
+        popoverShown = shown
+        updateUIWork(refresh: shown)
+    }
+
+    func setDashboardPresence(_ presence: Presence) {
+        guard presence != dashboardPresence else { return }
+        let appeared = dashboardPresence == .hidden
+        dashboardPresence = presence
+        updateUIWork(refresh: appeared && presence != .hidden)
+    }
+
+    /// Seconds between clock ticks: every second in the popover, slower for a dashboard left open.
+    private var clockCadence: TimeInterval? {
+        if popoverShown { return 1 }
+        switch dashboardPresence {
+        case .focused: return 5
+        case .background: return 30
+        case .hidden: return nil
+        }
+    }
+
+    private func updateUIWork(refresh: Bool) {
+        let cadence = clockCadence
+        if clockTimer?.timeInterval != cadence {
+            clockTimer?.invalidate()
+            clockTimer = nil
+            if let cadence {
+                now = Date()
+                clockTimer = repeating(cadence) { $0.now = Date() }
+            }
+        }
+        guard isUIVisible else {
+            liveTimer?.invalidate(); liveTimer = nil
+            activityTimer?.invalidate(); activityTimer = nil
+            return
+        }
+        if refresh {
+            refreshLiveSessions()
+            Task { await sleepControl.refresh() }
+            scanActivity(ifOlderThan: 300)
+            WorkLogState.shared.scan(ifOlderThan: 60)
+            refreshStatuses(ifOlderThan: 120)
+        }
+        if liveTimer == nil {
+            liveTimer = repeating(15) { store in
+                store.refreshLiveSessions()
+                await store.sleepControl.refresh()
+            }
+        }
+        if activityTimer == nil {
+            activityTimer = repeating(300) { store in
+                store.scanActivity()
+                WorkLogState.shared.scan()
+            }
         }
     }
 
@@ -208,8 +268,7 @@ final class UsageStore: ObservableObject {
         }
         for a in due { states[a.id] = .loading(stale: states[a.id]?.snapshot) }
 
-        let statusServices = settings.orderedEnabledProviders.compactMap(\.statusService)
-        let statusTask = Task { await StatusPageService.fetchAll(statusServices) }
+        let statusTask = isUIVisible || force ? Task { await fetchStatuses() } : nil
 
         await withTaskGroup(of: (Account, Result<UsageSnapshot, Error>).self) { group in
             for (i, a) in due.enumerated() {
@@ -222,13 +281,26 @@ final class UsageStore: ObservableObject {
             }
             for await (a, result) in group { apply(a, result) }
         }
-        serviceStatuses = await statusTask.value
-        lastRefresh = Date()
+        await statusTask?.value
+        // With no clock running in the background, this is what moves `now` for the menu bar's pace mark.
+        self.now = Date()
+        lastRefresh = self.now
         refreshLiveSessions()
+    }
+
+    private func fetchStatuses() async {
+        statusesFetchedAt = Date()
+        serviceStatuses = await StatusPageService.fetchAll(settings.orderedEnabledProviders.compactMap(\.statusService))
+    }
+
+    private func refreshStatuses(ifOlderThan age: TimeInterval) {
+        if let at = statusesFetchedAt, Date().timeIntervalSince(at) < age { return }
+        Task { await fetchStatuses() }
     }
 
     func refreshLiveSessions() {
         guard settings.showLiveSessions else { liveSessions = []; return }
+        guard isUIVisible else { return }
         guard liveScanTask == nil else { return }
         liveScanTask = Task {
             let sessions = await Task.detached(priority: .utility) { LiveSessionScanner.scan() }.value
@@ -299,10 +371,13 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    private func scanActivity() {
-        Task.detached(priority: .utility) {
-            let data = ActivityScanner.scan()
-            await MainActor.run { UsageStore.shared.activity = data }
+    private func scanActivity(ifOlderThan age: TimeInterval = 0) {
+        guard !isScanningActivity else { return }
+        if let at = activity?.scannedAt, Date().timeIntervalSince(at) < age { return }
+        isScanningActivity = true
+        Task {
+            activity = await Task.detached(priority: .utility) { ActivityScanner.scan() }.value
+            isScanningActivity = false
         }
     }
 
