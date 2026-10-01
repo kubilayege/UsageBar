@@ -61,7 +61,7 @@ enum LiveSessionScanner {
                 }
             }
         }
-        guard let cwd, let activity else { return nil }
+        guard let cwd, let activity, !WorkLogScanner.isTitleRun(cwd) else { return nil }
         return LiveSession(id: path, provider: .claude, project: (cwd as NSString).lastPathComponent, cwd: cwd,
                            model: model, branch: branch, tokens: tokens, tokensLabel: "ctx", lastActivity: activity, isProcessRunning: running)
     }

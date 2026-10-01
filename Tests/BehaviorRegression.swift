@@ -52,6 +52,7 @@ struct BehaviorRegression {
         workLog.testActiveTimeJoinsShortGapsAndCountsOverlapOnce()
         try workLog.testClaudeTitlesEditsAndSubagentsMerge()
         try workLog.testCodexPatchesAndSubagentParent()
+        try workLog.testT3TitleRunsFoldIntoTheirThread()
         workLog.testExportsAndRanges()
         let accounts = AccountTests()
         try accounts.testCodexRemembersAccountsAcrossLoginsAndFolders()

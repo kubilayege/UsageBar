@@ -85,6 +85,37 @@ struct WorkLogTests {
         XCTAssertEqual(WorkLogScanner.merge(sessions, codexTitles: ["parent": "Fix the build"]).first?.title, "Fix the build")
     }
 
+    func testT3TitleRunsFoldIntoTheirThread() throws {
+        let tmp = "/private/var/folders/x/T/t3code-claude-title-"
+        func log(_ id: String, cwd: String, at ts: String, prompt: String = "work", title: String? = nil) throws -> URL {
+            var records: [JSON] = [
+                ["type": "user", "message": ["role": "user", "content": prompt], "timestamp": ts, "cwd": cwd, "sessionId": id],
+                ["type": "assistant", "message": ["id": id, "model": "claude-haiku", "role": "assistant", "content": [["type": "text", "text": "{}"]],
+                                                  "usage": ["input_tokens": 100, "output_tokens": 10]],
+                 "timestamp": ts, "cwd": cwd, "sessionId": id],
+            ]
+            if let title { records.append(["type": "ai-title", "aiTitle": title, "sessionId": id]) }
+            return try write(records)
+        }
+        let urls = [
+            try log("thread", cwd: "/work/game", at: "2026-09-15T08:05:01.9Z"),
+            try log("other", cwd: "/work/site", at: "2026-09-15T08:06:30Z"),
+            try log("name", cwd: tmp + "51kL71", at: "2026-09-15T08:04:59.3Z", prompt: "Generate a title…\n\nUser message:\nfix links", title: "Hidden link visibility"),
+            try log("rename", cwd: tmp + "Ab12Cd", at: "2026-09-15T09:30:00Z",
+                    prompt: "Regenerate the title for an existing T3 Code thread.\nThe previous title was \"Hidden link visibility\".\nReturn JSON", title: "Link materials"),
+            try log("orphan", cwd: tmp + "Zz99Yy", at: "2026-09-15T12:00:00Z", title: "Nothing"),
+        ]
+        defer { urls.forEach { try? FileManager.default.removeItem(at: $0) } }
+        let parsed = urls.flatMap { WorkLogScanner.parseClaude($0.path) }
+        XCTAssertEqual(parsed.first { $0.id == "claude/rename" }?.previousTitle, "Hidden link visibility")
+        let merged = WorkLogScanner.merge(parsed)
+        XCTAssertEqual(Set(merged.map(\.id)), ["claude/thread", "claude/other"])
+        let thread = merged.first { $0.id == "claude/thread" }
+        XCTAssertEqual(thread?.project, "/work/game")
+        XCTAssertEqual(thread?.days.values.first?.usage["claude-haiku"]?.turns, 3)
+        XCTAssertEqual(merged.first { $0.id == "claude/other" }?.days.values.first?.usage["claude-haiku"]?.turns, 1)
+    }
+
     func testExportsAndRanges() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current

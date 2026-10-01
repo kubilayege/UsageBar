@@ -31,6 +31,10 @@ struct WorkSession: Codable, Sendable, Identifiable, Equatable {
     var days: [String: WorkDay]
     /// Git root (or cwd) the session is grouped under. Resolved after merging, never cached.
     var project: String = ""
+    /// When the first message was sent, to the second. Pairs T3 Code title runs with the thread they name.
+    var started: Double?
+    /// The old thread title a T3 Code retitle run was given.
+    var previousTitle: String?
 }
 
 struct WorkLogData: Sendable {
@@ -44,7 +48,7 @@ struct WorkLogData: Sendable {
 /// never prompts, responses or file contents. Results are cached per log file (mtime + size).
 enum WorkLogScanner {
     static let lookback: TimeInterval = 120 * 86400
-    private static let cacheVersion = 1
+    private static let cacheVersion = 2
     private struct CachedFile: Codable { var mtime: Double; var size: Int; var sessions: [WorkSession] }
     private struct Cache: Codable { var version = WorkLogScanner.cacheVersion; var files: [String: CachedFile] = [:] }
     private static var cacheURL: URL { Files.appSupport.appendingPathComponent("worklog-cache.json") }
@@ -90,15 +94,12 @@ enum WorkLogScanner {
             if current.cwd.isEmpty { current.cwd = s.cwd }
             current.title = current.title ?? s.title
             current.branch = current.branch ?? s.branch
-            for (day, work) in s.days {
-                var d = current.days[day] ?? WorkDay()
-                d.minutes = Array(Set(d.minutes).union(work.minutes)).sorted()
-                d.files.merge(work.files, uniquingKeysWith: +)
-                for (model, usage) in work.usage { d.usage[model, default: WorkUsage()].add(usage) }
-                current.days[day] = d
-            }
+            current.started = [current.started, s.started].compactMap { $0 }.min()
+            current.previousTitle = current.previousTitle ?? s.previousTitle
+            absorb(s, into: &current)
             merged[s.id] = current
         }
+        foldTitleRuns(&merged)
         var roots: [String: String] = [:]
         return merged.values.compactMap { s in
             var s = s
@@ -108,6 +109,46 @@ enum WorkLogScanner {
             guard !s.days.isEmpty, !s.cwd.isEmpty else { return nil }
             if let root = roots[s.cwd] { s.project = root } else { s.project = projectRoot(s.cwd); roots[s.cwd] = s.project }
             return s
+        }
+    }
+
+    private static func absorb(_ s: WorkSession, into current: inout WorkSession) {
+        for (day, work) in s.days {
+            var d = current.days[day] ?? WorkDay()
+            d.minutes = Array(Set(d.minutes).union(work.minutes)).sorted()
+            d.files.merge(work.files, uniquingKeysWith: +)
+            for (model, usage) in work.usage { d.usage[model, default: WorkUsage()].add(usage) }
+            current.days[day] = d
+        }
+    }
+
+    /// T3 Code runs from a temp folder like …/T/t3code-claude-title-51kL71 to name each thread.
+    static func isTitleRun(_ cwd: String) -> Bool {
+        let name = (cwd as NSString).lastPathComponent
+        return name.hasPrefix("t3code-") && name.contains("-title-")
+    }
+
+    /// Folds T3 Code title runs into the thread they named: the session whose first message follows within
+    /// seconds or, for a retitle, the thread that held the old title. Runs with no thread are dropped.
+    private static func foldTitleRuns(_ merged: inout [String: WorkSession]) {
+        let runs = merged.values.filter { isTitleRun($0.cwd) }.sorted { ($0.started ?? 0) < ($1.started ?? 0) }
+        guard !runs.isEmpty else { return }
+        let threads = merged.values.filter { !isTitleRun($0.cwd) }.compactMap { s in s.started.map { (id: s.id, started: $0) } }
+        var named: [String: String] = [:]
+        for run in runs {
+            merged[run.id] = nil
+            let thread: String?
+            if let previous = run.previousTitle.flatMap(cleanTitle) {
+                thread = named[previous]
+            } else if let start = run.started {
+                thread = threads.filter { (-15...120).contains($0.started - start) }.min { abs($0.started - start) < abs($1.started - start) }?.id
+            } else {
+                thread = nil
+            }
+            guard let thread, var target = merged[thread] else { continue }
+            absorb(run, into: &target)
+            merged[thread] = target
+            if let title = run.title.flatMap(cleanTitle) { named[title] = thread }
         }
     }
 
@@ -133,6 +174,7 @@ enum WorkLogScanner {
 
     private final class Builder {
         var cwd = "", branch: String?, title: String?, customTitle: String?
+        var started: Double?, previousTitle: String?
         var minutes: [String: Set<Int>] = [:]
         var files: [String: [String: Int]] = [:]
         var usage: [String: [String: WorkUsage]] = [:]
@@ -154,7 +196,8 @@ enum WorkLogScanner {
         func session(id: String, provider: ProviderID) -> WorkSession {
             var days: [String: WorkDay] = [:]
             for (day, set) in minutes { days[day] = WorkDay(minutes: set.sorted(), files: files[day] ?? [:], usage: usage[day] ?? [:]) }
-            return WorkSession(id: provider.rawValue + "/" + id, provider: provider, cwd: cwd, title: customTitle ?? title, branch: branch, days: days)
+            return WorkSession(id: provider.rawValue + "/" + id, provider: provider, cwd: cwd, title: customTitle ?? title, branch: branch, days: days,
+                               started: started, previousTitle: previousTitle)
         }
     }
 
@@ -177,6 +220,11 @@ enum WorkLogScanner {
                   let ts = line.edgeString(after: Keys.timestamp), let (minute, day) = clock.resolve(ts) else { return }
             if let cwd = line.edgeString(after: Keys.cwd), cwd.hasPrefix("/") { b.cwd = cwd }
             if let branch = line.edgeString(after: Keys.branch), !branch.isEmpty { b.branch = branch == "HEAD" ? nil : branch }
+            if b.started == nil {
+                b.started = Format.parseISO(ts)?.timeIntervalSince1970
+                // Only a title run's prompt is read, and only for the old title it quotes.
+                if isTitleRun(b.cwd), let text = line.json()?.dict("message").flatMap(messageText) { b.previousTitle = previousTitle(in: text) }
+            }
             b.touch(minute, day)
             guard isAssistant, line.contains(Keys.toolUse), Keys.editNeedles.contains(where: line.contains), let record = line.json(),
                   let content = record.dict("message")?.array("content") as? [JSON] else { return }
@@ -189,6 +237,19 @@ enum WorkLogScanner {
             main.add(UsageAnalysisScanner.parse(path, provider: .claude) ?? [])
         }
         return builders.map { $0.value.session(id: $0.key, provider: .claude) }.filter { !$0.days.isEmpty }
+    }
+
+    private static let previousTitleLine = try! NSRegularExpression(pattern: #"^The previous title was "(.+)"\.$"#, options: .anchorsMatchLines)
+
+    static func previousTitle(in prompt: String) -> String? {
+        guard let m = previousTitleLine.firstMatch(in: prompt, range: NSRange(prompt.startIndex..., in: prompt)),
+              let r = Range(m.range(at: 1), in: prompt) else { return nil }
+        return String(prompt[r])
+    }
+
+    private static func messageText(_ message: JSON) -> String? {
+        if let text = message.string("content") { return text }
+        return (message.array("content") as? [JSON])?.first { $0.string("type") == "text" }?.string("text")
     }
 
     // MARK: Codex
@@ -207,6 +268,7 @@ enum WorkLogScanner {
         var clock = MinuteClock()
         ActivityScanner.forEachLine(path) { line in
             guard let ts = line.edgeString(after: Keys.timestamp), let (minute, day) = clock.resolve(ts) else { return }
+            if b.started == nil { b.started = Format.parseISO(ts)?.timeIntervalSince1970 }
             b.touch(minute, day)
             let meta = line.edge(Keys.sessionMeta) != nil
             if meta || line.edge(Keys.turnContext) != nil {
