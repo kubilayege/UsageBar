@@ -536,7 +536,7 @@ enum WorkReceiptCLI {
                                         idleMinutes: settings.workIdleMinutes,
                                         price: WorkReceipt.pricer(catalog: ModelPriceStore.diskCatalog(), overrides: rates))
         let format: WorkExportFormat = args.contains("--csv") ? .csv : args.contains("--markdown") ? .markdown : .text
-        let options = WorkExportOptions(files: !args.contains("--no-files"), times: !args.contains("--no-times"), usage: args.contains("--usage"))
+        let options = WorkExportOptions(sessions: !args.contains("--no-sessions"), files: !args.contains("--no-files"), times: !args.contains("--no-times"), usage: args.contains("--usage"))
         print(WorkReceiptExport.render(receipt, as: format, options: options))
         exit(0)
     }

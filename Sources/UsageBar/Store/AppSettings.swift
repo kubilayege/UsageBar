@@ -36,6 +36,7 @@ final class AppSettings: ObservableObject {
     @Published var hiddenWorkProjects: Set<String> { didSet { d.set(hiddenWorkProjects.sorted(), forKey: "hiddenWorkProjects") } }
     @Published var workIdleMinutes: Int { didSet { d.set(workIdleMinutes, forKey: "workIdleMinutes") } }
     @Published var workCopyFormat: WorkExportFormat { didSet { d.set(workCopyFormat.rawValue, forKey: "workCopyFormat") } }
+    @Published var workExportSessions: Bool { didSet { d.set(workExportSessions, forKey: "workExportSessions") } }
     @Published var workExportFiles: Bool { didSet { d.set(workExportFiles, forKey: "workExportFiles") } }
     @Published var workExportTimes: Bool { didSet { d.set(workExportTimes, forKey: "workExportTimes") } }
     @Published var workExportUsage: Bool { didSet { d.set(workExportUsage, forKey: "workExportUsage") } }
@@ -67,6 +68,7 @@ final class AppSettings: ObservableObject {
         hiddenWorkProjects = Set(d.stringArray(forKey: "hiddenWorkProjects") ?? [])
         workIdleMinutes = d.object(forKey: "workIdleMinutes") as? Int ?? 15
         workCopyFormat = WorkExportFormat(rawValue: d.string(forKey: "workCopyFormat") ?? "") ?? .text
+        workExportSessions = d.object(forKey: "workExportSessions") as? Bool ?? true
         workExportFiles = d.object(forKey: "workExportFiles") as? Bool ?? true
         workExportTimes = d.object(forKey: "workExportTimes") as? Bool ?? true
         workExportUsage = d.bool(forKey: "workExportUsage")

@@ -73,7 +73,7 @@ The same receipt is available from the terminal:
 UsageBar --receipt                         # today, plain text
 UsageBar --receipt --yesterday --markdown
 UsageBar --receipt --week --csv            # or --month; --date 2026-09-15 picks the day
-UsageBar --receipt --usage --no-files      # add tokens & cost, drop file lists; --no-times drops times
+UsageBar --receipt --usage --no-files      # add tokens & cost, drop file lists; --no-times drops times, --no-sessions lists projects only
 ```
 
 ## How each provider is read

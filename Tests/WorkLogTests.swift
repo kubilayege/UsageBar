@@ -150,6 +150,8 @@ struct WorkLogTests {
         XCTAssertTrue(text.contains("    A.swift, B.swift"))
         let plain = WorkReceiptExport.render(r, as: .text, options: WorkExportOptions(files: false, times: false, usage: false))
         XCTAssertTrue(!plain.contains("A.swift") && !plain.contains("09:00") && !plain.contains("$"))
+        let compact = WorkReceiptExport.render(r, as: .text, options: WorkExportOptions(sessions: false))
+        XCTAssertTrue(compact.hasSuffix("\n\napp · 32m"))
         let markdown = WorkReceiptExport.render(r, as: .markdown)
         XCTAssertTrue(markdown.contains("### app · 32m"))
         XCTAssertTrue(markdown.contains("- **Ship, the \"log\"** · Claude · 09:00–09:31 · 31m  \n  `A.swift`, `B.swift`"))

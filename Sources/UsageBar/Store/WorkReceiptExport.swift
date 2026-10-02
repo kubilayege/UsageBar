@@ -13,6 +13,8 @@ enum WorkExportFormat: String, CaseIterable, Identifiable, Sendable {
 }
 
 struct WorkExportOptions: Equatable, Sendable {
+    /// Off lists projects only, for a compact receipt.
+    var sessions = true
     var files = true
     var times = true
     var usage = false
@@ -45,14 +47,15 @@ enum WorkReceiptExport {
                 }
             }
         }
-        for p in r.projects {
+        for (i, p) in r.projects.enumerated() {
             if scope != .session {
-                if !lines.isEmpty { lines.append("") }
+                // Project-only lists stay together under one gap.
+                if !lines.isEmpty && (o.sessions || i == 0) { lines.append("") }
                 var header = "\(p.name) · \(Format.hm(p.activeMinutes))"
                 if scope == .project { header += " · \(r.range.title)" }
                 lines.append(header)
             }
-            for s in p.sessions {
+            for s in p.sessions where o.sessions || scope == .session {
                 var line = (scope == .session ? "" : "  • ") + s.name
                 var meta = sessionMeta(s, o, multiDay: multiDay)
                 if scope == .session { meta.insert(p.name, at: 0) }
@@ -89,7 +92,7 @@ enum WorkReceiptExport {
                 lines.append("### \(p.name) · \(Format.hm(p.activeMinutes))" + (scope == .project ? " · \(r.range.title)" : ""))
                 lines.append("")
             }
-            for s in p.sessions {
+            for s in p.sessions where o.sessions || scope == .session {
                 var meta = sessionMeta(s, o, multiDay: multiDay)
                 if scope == .session { meta.insert(p.name, at: 0) }
                 var line = "- **\(s.name)**" + (meta.isEmpty ? "" : " · " + meta.joined(separator: " · "))

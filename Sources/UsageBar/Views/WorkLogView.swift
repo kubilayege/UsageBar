@@ -44,7 +44,7 @@ final class WorkLogState: ObservableObject {
 
     var options: WorkExportOptions {
         let s = AppSettings.shared
-        return WorkExportOptions(files: s.workExportFiles, times: s.workExportTimes, usage: s.workExportUsage)
+        return WorkExportOptions(sessions: s.workExportSessions, files: s.workExportFiles, times: s.workExportTimes, usage: s.workExportUsage)
     }
 
     func copy(_ receipt: WorkReceipt, as format: WorkExportFormat? = nil, scope: WorkReceiptExport.Scope = .full, id: String = "receipt") {
@@ -264,6 +264,7 @@ struct WorkLogView: View {
 
             Rectangle().fill(Theme.line).frame(width: 1, height: 20).padding(.horizontal, 4)
             Text("Include").font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
+            IncludeChip(title: "Sessions", value: $settings.workExportSessions)
             IncludeChip(title: "Files", value: $settings.workExportFiles)
             IncludeChip(title: "Times", value: $settings.workExportTimes)
             IncludeChip(title: "Tokens & cost", value: $settings.workExportUsage)
@@ -588,7 +589,7 @@ struct ReceiptPreview: View {
         VStack(spacing: 12) {
             paper
             HStack(spacing: 6) {
-                Text("Include").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                IncludeChip(title: "Sessions", value: $settings.workExportSessions)
                 IncludeChip(title: "Times", value: $settings.workExportTimes)
                 IncludeChip(title: "Files", value: $settings.workExportFiles)
                 IncludeChip(title: "Tokens & cost", value: $settings.workExportUsage)
@@ -676,7 +677,7 @@ struct IncludeChip: View {
         Button { value.toggle() } label: {
             HStack(spacing: 4) {
                 Image(systemName: value ? "checkmark" : "plus").font(.system(size: 9, weight: .bold))
-                Text(title).font(.system(size: 11.5, weight: .medium))
+                Text(title).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
             }
             .foregroundStyle(value ? Theme.textPrimary : Theme.textMuted)
             .padding(.horizontal, 8).padding(.vertical, 5)
@@ -713,7 +714,6 @@ struct ReceiptPaperView: View {
     private let ink = Color(hex: 0x2A2321)
     private let faded = Color(hex: 0x857A72)
     private let paper = Color(hex: 0xF7F2E8)
-    private let maxProjects = 10, maxSessions = 5
 
     var body: some View {
         VStack(spacing: 0) {
@@ -729,19 +729,15 @@ struct ReceiptPaperView: View {
                 if receipt.isEmpty {
                     Text("NO AGENT ACTIVITY").font(mono(11)).foregroundStyle(faded).frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
-                ForEach(receipt.projects.prefix(maxProjects)) { p in
+                ForEach(receipt.projects) { p in
                     VStack(alignment: .leading, spacing: 3) {
                         row(p.name.uppercased(), Format.hm(p.activeMinutes), bold: true)
-                        ForEach(p.sessions.prefix(maxSessions)) { s in
-                            row("  " + s.name, options.times ? Format.hm(s.activeMinutes) : "", size: 10.5, color: faded)
-                        }
-                        if p.sessions.count > maxSessions {
-                            row("  +\(p.sessions.count - maxSessions) more sessions", "", size: 10.5, color: faded)
+                        if options.sessions {
+                            ForEach(p.sessions) { s in
+                                row("  " + s.name, options.times ? Format.hm(s.activeMinutes) : "", size: 10.5, color: faded)
+                            }
                         }
                     }
-                }
-                if receipt.projects.count > maxProjects {
-                    row("+\(receipt.projects.count - maxProjects) MORE PROJECTS", "", size: 10.5, color: faded)
                 }
                 rule
                 VStack(alignment: .leading, spacing: 3) {
