@@ -107,8 +107,10 @@ struct PopoverView: View {
             .padding(.horizontal, inset)
 
             if let receipt {
+                // Counts follow the projects left on the receipt.
+                let shown = receipt.without(projects: workLog.leftOut)
                 Text(receipt.isEmpty ? "No agent activity \(receiptRange == .week ? "this week" : receiptRange.rawValue.lowercased()) yet."
-                     : "\(Format.hm(receipt.activeMinutes)) active · \(WorkReceiptExport.count(receipt.projects.count, "project")) · \(WorkReceiptExport.count(receipt.sessionCount, "session"))")
+                     : "\(Format.hm(shown.activeMinutes)) active · \(WorkReceiptExport.count(shown.projects.count, "project")) · \(WorkReceiptExport.count(shown.sessionCount, "session"))")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.textMuted)
                     .padding(.horizontal, inset).padding(.top, 10).padding(.bottom, 8)
                 ReceiptPreview(receipt: receipt, maxPaperHeight: viewportHeight - 250)

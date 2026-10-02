@@ -221,6 +221,13 @@ struct WorkReceipt: Sendable {
         Self.assemble([session], range: range, idleMinutes: idleMinutes)
     }
 
+    /// The receipt with these projects taken off and its totals recomputed.
+    func without(projects ids: Set<String>) -> WorkReceipt {
+        guard projects.contains(where: { ids.contains($0.id) }) else { return self }
+        return Self.assemble(projects.filter { !ids.contains($0.id) }.flatMap(\.sessions), range: range,
+                             idleMinutes: idleMinutes, hidden: hiddenProjects)
+    }
+
     /// Consecutive activity closer than the idle gap counts as continuous; isolated minutes count once.
     static func activeMinutes(_ sorted: [Int], idle: Int) -> Int {
         guard var previous = sorted.first else { return 0 }

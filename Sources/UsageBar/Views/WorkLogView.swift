@@ -12,6 +12,8 @@ final class WorkLogState: ObservableObject {
     @Published private(set) var isScanning = false
     /// Id of the item whose copy button last succeeded, for a brief checkmark.
     @Published var copiedID: String?
+    /// Projects taken off the receipt being shared. Never saved; cleared when the preview closes.
+    @Published var leftOut: Set<String> = []
 
     private var scanTask: Task<Void, Never>?
 
@@ -586,8 +588,19 @@ struct ReceiptPreview: View {
     @State private var hoverPaper = false
 
     var body: some View {
+        let shown = receipt.without(projects: state.leftOut)
+        let removed = receipt.projects.filter { state.leftOut.contains($0.id) }
         VStack(spacing: 12) {
-            paper
+            paper(shown)
+            if !removed.isEmpty {
+                FlowLayout(spacing: 6) {
+                    Text("Left out").font(.system(size: 11)).foregroundStyle(Theme.textMuted).padding(.vertical, 5)
+                    ForEach(removed) { p in
+                        IncludeChip(title: p.name, value: Binding(get: { false }, set: { _ in state.leftOut.remove(p.id) }))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack(spacing: 6) {
                 IncludeChip(title: "Sessions", value: $settings.workExportSessions)
                 IncludeChip(title: "Times", value: $settings.workExportTimes)
@@ -595,12 +608,13 @@ struct ReceiptPreview: View {
                 IncludeChip(title: "Tokens & cost", value: $settings.workExportUsage)
                 Spacer(minLength: 0)
             }
-            exportBar
+            exportBar(shown)
         }
+        .onDisappear { state.leftOut = [] }
     }
 
-    private var paper: some View {
-        let sheet = ReceiptPaperView(receipt: receipt, options: state.options)
+    private func paper(_ receipt: WorkReceipt) -> some View {
+        let sheet = ReceiptPaperView(receipt: receipt, options: state.options) { state.leftOut.insert($0.id) }
             .compositingGroup()
             .shadow(color: .black.opacity(0.5), radius: 12, y: 5)
             .padding(.vertical, 8)
@@ -628,7 +642,7 @@ struct ReceiptPreview: View {
         .accessibilityLabel("Work receipt for \(receipt.range.title), \(Format.hm(receipt.activeMinutes)) active")
     }
 
-    private var exportBar: some View {
+    private func exportBar(_ receipt: WorkReceipt) -> some View {
         let imageCopied = state.copiedID == "preview-image", textCopied = state.copiedID == "preview-text"
         let format = settings.workCopyFormat
         return HStack(spacing: 6) {
@@ -711,6 +725,9 @@ enum ReceiptImage {
 struct ReceiptPaperView: View {
     var receipt: WorkReceipt
     var options: WorkExportOptions
+    /// Set in the preview to offer a remove button on the hovered project. Exported images leave it nil.
+    var onRemove: ((WorkReceipt.Project) -> Void)? = nil
+    @State private var hovered: String?
     private let ink = Color(hex: 0x2A2321)
     private let faded = Color(hex: 0x857A72)
     private let paper = Color(hex: 0xF7F2E8)
@@ -738,6 +755,7 @@ struct ReceiptPaperView: View {
                             }
                         }
                     }
+                    .modifier(removable(p))
                 }
                 rule
                 VStack(alignment: .leading, spacing: 3) {
@@ -762,6 +780,36 @@ struct ReceiptPaperView: View {
         }
         .frame(width: 360)
         .environment(\.colorScheme, .light)
+    }
+
+    /// Widens the hover area into the left margin, where the remove button sits.
+    private func removable(_ p: WorkReceipt.Project) -> some ViewModifier {
+        RemovableProject(show: onRemove != nil && hovered == p.id, tint: faded, name: p.name,
+                         remove: { onRemove?(p) }, hover: { hovered = $0 ? p.id : (hovered == p.id ? nil : hovered) })
+    }
+
+    private struct RemovableProject: ViewModifier {
+        var show: Bool, tint: Color, name: String
+        var remove: () -> Void, hover: (Bool) -> Void
+
+        func body(content: Content) -> some View {
+            content
+                .padding(.leading, 22)
+                .overlay(alignment: .topLeading) {
+                    if show {
+                        Button(action: remove) {
+                            Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(tint)
+                                .frame(width: 22, height: 15).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Leave \(name) off this receipt")
+                        .accessibilityLabel("Remove \(name) from the receipt")
+                    }
+                }
+                .contentShape(Rectangle())
+                .onHover(perform: hover)
+                .padding(.leading, -22)
+        }
     }
 
     private func mono(_ size: CGFloat, bold: Bool = false) -> Font { .system(size: size, weight: bold ? .bold : .regular, design: .monospaced) }

@@ -158,6 +158,13 @@ struct WorkLogTests {
         let csv = WorkReceiptExport.render(r, as: .csv).split(separator: "\n")
         XCTAssertEqual(csv.count, 3)
         XCTAssertTrue(csv[1].hasPrefix("2026-09-16,app,\"Ship, the \"\"log\"\"\",Claude,m,09:00,09:31,31,0.52,Sources/A.swift; B.swift,1100000,1.1000"))
+        let other = WorkReceipt.build(sessions + [WorkSession(id: "claude/3", provider: .claude, cwd: "/w/site", title: "Hero", branch: nil,
+                                                              days: ["2026-09-16": WorkDay(minutes: [start + 120])], project: "/w/site")],
+                                      range: WorkRange(.day, containing: date), idleMinutes: 15)
+        let trimmed = other.without(projects: ["/w/site"])
+        XCTAssertEqual(trimmed.projects.map(\.id), ["/w/app"])
+        XCTAssertEqual(trimmed.activeMinutes, 32)
+        XCTAssertEqual(trimmed.sessionCount, 2)
         let one = WorkReceiptExport.render(r.only(session: r.projects[0].sessions[1]), as: .text, scope: .session)
         XCTAssertEqual(one, "Edited C.swift (app, Codex, 10:00–10:01, 1m)\n  C.swift")
     }
