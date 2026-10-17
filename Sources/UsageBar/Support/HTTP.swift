@@ -101,6 +101,17 @@ enum Files {
     static func path(_ rel: String) -> String { (home as NSString).appendingPathComponent(rel) }
     static func exists(_ path: String) -> Bool { FileManager.default.fileExists(atPath: path) }
 
+    /// Modification date and size from a single stat call. `attributesOfItem` builds a dictionary
+    /// of every attribute and costs about 7x as much across thousands of session logs.
+    static func stamp(_ path: String) -> (modified: Date, size: Int)? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        let t = info.st_mtimespec
+        // Same arithmetic as Foundation, so dates match the ones already saved in the scan caches.
+        let modified = Date(timeIntervalSinceReferenceDate: Double(t.tv_sec) - kCFAbsoluteTimeIntervalSince1970 + Double(t.tv_nsec) * 1.0e-9)
+        return (modified, Int(info.st_size))
+    }
+
     static func readJSON(_ path: String) -> JSON? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? JSON

@@ -53,11 +53,8 @@ struct AntigravityProvider: UsageProvider {
     }
 
     private func discover() -> Server? {
-        guard let ps = Shell.run("/bin/ps", ["-axo", "pid=,args="]) else { return nil }
-        for line in ps.split(separator: "\n") {
-            let s = line.trimmingCharacters(in: .whitespaces)
+        for (pid, s) in ProcessList.commandLines() {
             guard s.lowercased().contains("antigravity"), s.contains("language_server") else { continue }
-            guard let pidStr = s.split(separator: " ").first, let pid = Int32(pidStr) else { continue }
             var csrf: String?
             if let r = s.range(of: #"--csrf_token[= ]([A-Za-z0-9\-_]+)"#, options: .regularExpression) {
                 let match = String(s[r])

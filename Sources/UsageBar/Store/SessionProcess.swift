@@ -49,28 +49,17 @@ struct SessionProcess {
     }
 
     static func scan() -> [SessionProcess] {
-        guard let ps = Shell.run("/bin/ps", ["-axo", "pid=,args="]) else { return [] }
         var processes: [Int32: SessionProcess] = [:]
-        for line in ps.split(separator: "\n") {
-            let fields = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            guard fields.count == 2, let pid = Int32(fields[0]), let provider = provider(command: String(fields[1])) else { continue }
-            let words = fields[1].split(whereSeparator: \.isWhitespace).map(String.init)
+        for (pid, args) in ProcessList.commandLines() {
+            guard let provider = provider(command: args) else { continue }
+            let words = args.split(whereSeparator: \.isWhitespace).map(String.init)
             processes[pid] = SessionProcess(pid: pid, provider: provider, sessionID: namedSession(words),
                 headless: words.contains("-p") || words.contains("--print") || words.contains("exec"))
         }
         guard !processes.isEmpty else { return [] }
-        let pids = processes.keys.map(String.init).joined(separator: ",")
-        if let output = Shell.run("/usr/sbin/lsof", ["-a", "-w", "-p", pids, "-Fpfn"], requireSuccess: false) {
-            var pid: Int32?, descriptor = ""
-            for line in output.split(separator: "\n") {
-                if line.hasPrefix("p") { pid = Int32(line.dropFirst()) }
-                else if line.hasPrefix("f") { descriptor = String(line.dropFirst()) }
-                else if line.hasPrefix("n"), let pid {
-                    let path = String(line.dropFirst())
-                    if descriptor == "cwd" { processes[pid]?.cwd = URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
-                    else if path.hasSuffix(".jsonl") { processes[pid]?.logs.insert(path) }
-                }
-            }
+        for pid in processes.keys {
+            processes[pid]?.cwd = ProcessList.cwd(pid).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+            processes[pid]?.logs = Set(ProcessList.openFiles(pid).filter { $0.hasSuffix(".jsonl") })
         }
         // Claude's session registry associates idle sessions with a PID even when the log is closed.
         let registry = Files.claudeRoot + "/sessions"

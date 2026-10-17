@@ -3,6 +3,8 @@ import Foundation
 /// Uses structured log records for metadata and matches running processes to individual sessions.
 enum LiveSessionScanner {
     static let activeWindow: TimeInterval = 10 * 60
+    /// A running session that has gone idle would otherwise be read and parsed on every scan.
+    private static let parsed = ParsedLogs()
 
     static func scan() -> [LiveSession] {
         let cutoff = Date().addingTimeInterval(-activeWindow)
@@ -25,10 +27,10 @@ enum LiveSessionScanner {
                 let path = (directory as NSString).appendingPathComponent(file)
                 let sessionID = (file as NSString).deletingPathExtension
                 let running = agents.contains { $0.matches(sessionID: sessionID, path: path) }
-                guard let modified = modificationDate(path), modified >= cutoff || running else { continue }
-                let records = JSONL.edges(path)
-                guard let session = claudeSession(records: records, path: path, running: running),
+                guard let stamp = Files.stamp(path), stamp.modified >= cutoff || running,
+                      var session = parsed.session(path, stamp, parse: { claudeSession(records: JSONL.edges(path), path: path, running: false) }),
                       session.lastActivity >= cutoff || running else { continue }
+                session.isProcessRunning = running
                 out.append(session)
             }
         }
@@ -75,23 +77,30 @@ enum LiveSessionScanner {
             guard relative.hasSuffix(".jsonl") else { continue }
             let path = (root as NSString).appendingPathComponent(relative)
             let running = agents.contains { $0.matches(sessionID: SessionProcess.sessionKey(path), path: path) }
-            guard let modified = modificationDate(path), modified >= cutoff || running else { continue }
-            var cwd: String?, model: String?, tokens: Int?, activity: Date?
-            for record in JSONL.edges(path) {
-                guard let payload = record.dict("payload") else { continue }
-                if ["session_meta", "turn_context"].contains(record.string("type") ?? "") {
-                    if let value = payload.string("cwd") { cwd = value }
-                    if let value = payload.string("model") { model = value }
-                }
-                if let count = payload.dict("info")?.dict("total_token_usage")?.int("total_tokens") { tokens = count }
-                if let timestamp = Format.parseISO(record.string("timestamp")) { activity = max(activity ?? .distantPast, timestamp) }
-            }
-            guard let cwd, let activity, activity >= cutoff || running else { continue }
-            out.append(LiveSession(id: path, provider: .codex, project: (cwd as NSString).lastPathComponent, cwd: cwd,
-                                   model: model, branch: nil, tokens: tokens, tokensLabel: "tok", lastActivity: activity, isProcessRunning: running))
+            guard let stamp = Files.stamp(path), stamp.modified >= cutoff || running,
+                  var session = parsed.session(path, stamp, parse: { codexSession(records: JSONL.edges(path), path: path) }),
+                  session.lastActivity >= cutoff || running else { continue }
+            session.isProcessRunning = running
+            out.append(session)
         }
         markNewestRecentSessions(&out, processes: agents, cutoff: cutoff)
         return out
+    }
+
+    private static func codexSession(records: [JSON], path: String) -> LiveSession? {
+        var cwd: String?, model: String?, tokens: Int?, activity: Date?
+        for record in records {
+            guard let payload = record.dict("payload") else { continue }
+            if ["session_meta", "turn_context"].contains(record.string("type") ?? "") {
+                if let value = payload.string("cwd") { cwd = value }
+                if let value = payload.string("model") { model = value }
+            }
+            if let count = payload.dict("info")?.dict("total_token_usage")?.int("total_tokens") { tokens = count }
+            if let timestamp = Format.parseISO(record.string("timestamp")) { activity = max(activity ?? .distantPast, timestamp) }
+        }
+        guard let cwd, let activity else { return nil }
+        return LiveSession(id: path, provider: .codex, project: (cwd as NSString).lastPathComponent, cwd: cwd,
+                           model: model, branch: nil, tokens: tokens, tokensLabel: "tok", lastActivity: activity, isProcessRunning: false)
     }
 
     private static func markNewestRecentSessions(_ sessions: inout [LiveSession], processes: [SessionProcess], cutoff: Date) {
@@ -128,14 +137,26 @@ enum LiveSessionScanner {
         SessionProcess.provider(command: line) == provider
     }
 
-    private static func modificationDate(_ path: String) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-    }
-
     private static func prettyModel(_ value: String) -> String {
         var model = value.replacingOccurrences(of: "claude-", with: "")
         if let range = model.range(of: #"-\d{8}$"#, options: .regularExpression) { model.removeSubrange(range) }
         return model
+    }
+}
+
+/// Parsed sessions keyed by log path, reused while the log's size and modification date are unchanged.
+final class ParsedLogs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: (modified: Date, size: Int, session: LiveSession?)] = [:]
+
+    func session(_ path: String, _ stamp: (modified: Date, size: Int), parse: () -> LiveSession?) -> LiveSession? {
+        if let hit = lock.withLock({ entries[path] }), hit.modified == stamp.modified, hit.size == stamp.size { return hit.session }
+        let session = parse()
+        lock.withLock {
+            if entries.count > 256 { entries.removeAll() }
+            entries[path] = (stamp.modified, stamp.size, session)
+        }
+        return session
     }
 }
 

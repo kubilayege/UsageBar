@@ -96,9 +96,8 @@ enum UsageAnalysisScanner {
             while let relative = enumerator.nextObject() as? String {
                 guard relative.hasSuffix(".jsonl") else { continue }
                 let path = root + "/" + relative
-                guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                      let modified = attributes[.modificationDate] as? Date,
-                      let size = (attributes[.size] as? NSNumber)?.uint64Value else { unreadable += 1; continue }
+                guard case let (modified, length)? = Files.stamp(path) else { unreadable += 1; continue }
+                let size = UInt64(length)
                 guard modified >= cutoff else { continue }
                 seen.insert(path)
                 if let entry = cache.files[path], entry.modified == modified && entry.size == size { all += entry.turns; continue }

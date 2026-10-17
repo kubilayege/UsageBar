@@ -12,6 +12,9 @@ func XCTAssertTrue(_ actual: Bool, file: StaticString = #filePath, line: UInt = 
 struct BehaviorRegression {
     @MainActor static func main() async throws {
         if CommandLine.arguments.contains("--usagebar-test-agent") {
+            // Hold the session log open, like a Codex CLI writing its log.
+            let log = CommandLine.arguments.first { $0.hasSuffix(".jsonl") }.flatMap { FileHandle(forReadingAtPath: $0) }
+            defer { try? log?.close() }
             try await Task.sleep(nanoseconds: 60_000_000_000)
             return
         }

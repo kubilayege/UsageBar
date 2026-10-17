@@ -64,9 +64,7 @@ enum WorkLogScanner {
             while let relative = enumerator.nextObject() as? String {
                 guard relative.hasSuffix(".jsonl") else { continue }
                 let path = root + "/" + relative
-                guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-                      let modified = attributes[.modificationDate] as? Date, modified >= cutoff,
-                      let size = (attributes[.size] as? NSNumber)?.intValue else { continue }
+                guard case let (modified, size)? = Files.stamp(path), modified >= cutoff else { continue }
                 seen.insert(path)
                 if let entry = cache.files[path], entry.mtime == modified.timeIntervalSince1970, entry.size == size {
                     found += entry.sessions

@@ -144,6 +144,9 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Seconds between live-session scans: a dashboard behind other windows needs them less often.
+    private var liveCadence: TimeInterval { popoverShown || dashboardPresence == .focused ? 15 : 60 }
+
     private func updateUIWork(refresh: Bool) {
         let cadence = clockCadence
         if clockTimer?.timeInterval != cadence {
@@ -166,8 +169,11 @@ final class UsageStore: ObservableObject {
             WorkLogState.shared.scan(ifOlderThan: 60)
             refreshStatuses(ifOlderThan: 120)
         }
-        if liveTimer == nil {
-            liveTimer = repeating(15) { store in
+        if liveTimer?.timeInterval != liveCadence {
+            // Brought back to the front after slower scans: catch up instead of waiting.
+            if let previous = liveTimer?.timeInterval, previous > liveCadence, !refresh { refreshLiveSessions() }
+            liveTimer?.invalidate()
+            liveTimer = repeating(liveCadence) { store in
                 store.refreshLiveSessions()
                 await store.sleepControl.refresh()
             }

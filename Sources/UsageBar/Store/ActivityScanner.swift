@@ -29,8 +29,7 @@ enum ActivityScanner {
 
         for (provider, root) in [(ProviderID.claude, Files.path(".claude/projects")), (.codex, Files.path(".codex/sessions"))] {
             for path in jsonlFiles(under: root) {
-                guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                      let mtime = (attrs[.modificationDate] as? Date), let size = attrs[.size] as? Int else { continue }
+                guard case let (mtime, size)? = Files.stamp(path) else { continue }
                 guard mtime >= cutoff else { continue }
                 seenPaths.insert(path)
                 if let c = cache.files[path], c.mtime == mtime.timeIntervalSince1970, c.size == size {

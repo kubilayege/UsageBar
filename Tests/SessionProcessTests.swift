@@ -27,7 +27,10 @@ struct SessionProcessTests {
         let fixture = Process()
         fixture.executableURL = executable
         let id = "a8e24a8d-b7fc-455f-b488-022f2a6a7d4a"
-        fixture.arguments = ["--usagebar-test-agent", "=", "==", "--session-id", id]
+        let log = directory.appendingPathComponent("\(id).jsonl")
+        try Data().write(to: log)
+        fixture.arguments = ["--usagebar-test-agent", "=", "==", "--session-id", id, log.path]
+        fixture.currentDirectoryURL = directory
         fixture.standardOutput = FileHandle.nullDevice
         fixture.standardError = FileHandle.nullDevice
         try fixture.run()
@@ -36,6 +39,15 @@ struct SessionProcessTests {
             let found = SessionProcess.scan().first { $0.pid == fixture.processIdentifier }
             XCTAssertEqual(found?.provider, .claude)
             XCTAssertEqual(found?.sessionID, id)
+            XCTAssertEqual(found?.cwd, directory.resolvingSymlinksInPath().path)
         }
+        // The fixture opens its log just after launch.
+        var logs: Set<String> = []
+        for _ in 0..<50 where logs.isEmpty {
+            logs = SessionProcess.scan().first { $0.pid == fixture.processIdentifier }?.logs ?? []
+            if logs.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        // The kernel reports /private/var where the temporary directory says /var, as lsof did.
+        XCTAssertEqual(Set(logs.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }), [log.resolvingSymlinksInPath().path])
     }
 }
