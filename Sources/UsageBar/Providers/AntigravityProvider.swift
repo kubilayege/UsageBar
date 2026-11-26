@@ -23,13 +23,20 @@ struct AntigravityProvider: UsageProvider {
             var headers = ["Content-Type": "application/json", "Connect-Protocol-Version": "1"]
             if let csrf = server.csrf { headers["X-Codeium-Csrf-Token"] = csrf }
             for endpoint in server.endpoints {
-                let url = URL(string: "\(endpoint.scheme)://127.0.0.1:\(endpoint.port)/exa.language_server_pb.LanguageServerService/GetUserStatus")!
-                guard let (data, resp) = try? await HTTP.request(url, method: "POST", headers: headers, body: body, session: HTTP.insecureLocal) else { continue }
-                guard resp.statusCode == 200, let json = try? HTTP.jsonObject(data) else {
-                    lastError = "Antigravity replied HTTP \(resp.statusCode) on port \(endpoint.port)"
+                func call(_ method: String) async -> (status: Int, json: JSON?)? {
+                    let url = URL(string: "\(endpoint.scheme)://127.0.0.1:\(endpoint.port)/exa.language_server_pb.LanguageServerService/\(method)")!
+                    guard let (data, resp) = try? await HTTP.request(url, method: "POST", headers: headers, body: body, session: HTTP.insecureLocal) else { return nil }
+                    return (resp.statusCode, resp.statusCode == 200 ? try? HTTP.jsonObject(data) : nil)
+                }
+                guard let status = await call("GetUserStatus") else { continue }
+                guard let json = status.json else {
+                    lastError = "Antigravity replied HTTP \(status.status) on port \(endpoint.port)"
                     continue
                 }
-                let windows = Self.windows(from: json)
+                // The subscription's real limits: shared 5-hour and weekly pools per model group.
+                // Older servers lack this call; the per-model fractions are the fallback.
+                var windows = await call("RetrieveUserQuotaSummary")?.json.map(Self.summaryWindows) ?? []
+                if windows.isEmpty { windows = Self.windows(from: json) }
                 guard !windows.isEmpty else {
                     lastError = "Antigravity status has no quota info"
                     continue
@@ -47,6 +54,53 @@ struct AntigravityProvider: UsageProvider {
     }
 
     // MARK: Quota parsing
+
+    /// Windows from RetrieveUserQuotaSummary. Antigravity groups its models ("Gemini Models",
+    /// "Claude and GPT models"); every model in a group draws on the same 5-hour and weekly
+    /// limits, in proportion to the cost of its tokens. One row per group and window, all primary.
+    static func summaryWindows(from json: JSON) -> [UsageWindow] {
+        let groups = (json.dict("response") ?? json).array("groups") ?? []
+        var windows: [UsageWindow] = []
+        for case let group as JSON in groups {
+            let name = groupName(group.string("displayName") ?? "Quota")
+            for case let bucket as JSON in group.array("buckets") ?? [] {
+                let duration = windowDuration(bucket.string("window"))
+                let span = duration.map(Format.duration) ?? bucket.string("displayName") ?? "Limit"
+                // Proto3 JSON drops zero values, so an exhausted bucket has no remainingFraction.
+                let remaining = bucket.double("remainingFraction") ?? 0
+                windows.append(UsageWindow(id: bucket.string("bucketId") ?? "\(name) \(span)", label: "\(name) \(span)",
+                                           percent: min(100, max(0, (1 - remaining) * 100)),
+                                           resetsAt: Format.parseISO(bucket.string("resetTime")), windowDuration: duration))
+            }
+        }
+        return windows
+    }
+
+    /// "Gemini Models" → "Gemini", "Claude and GPT models" → "Claude": the first word fits the row label.
+    private static func groupName(_ displayName: String) -> String {
+        var name = displayName.trimmingCharacters(in: .whitespaces)
+        if name.lowercased().hasSuffix(" models") { name = String(name.dropLast(7)) }
+        return name.split(separator: " ").first.map(String.init) ?? name
+    }
+
+    private static func windowDuration(_ window: String?) -> TimeInterval? {
+        guard let window = window?.lowercased() else { return nil }
+        switch window {
+        case "hourly": return 3600
+        case "daily": return 86400
+        case "weekly": return 7 * 86400
+        case "monthly": return 30 * 86400
+        default: break
+        }
+        guard let unit = window.last, let count = Double(window.dropLast()), count > 0 else { return nil }
+        switch unit {
+        case "m": return count * 60
+        case "h": return count * 3600
+        case "d": return count * 86400
+        case "w": return count * 7 * 86400
+        default: return nil
+        }
+    }
 
     /// Thinking levels Antigravity appends to a model label, e.g. "Gemini 4 Neon (High)".
     private static let thinkingLevels: Set<String> = ["minimal", "low", "medium", "high", "xhigh", "extra high", "max"]

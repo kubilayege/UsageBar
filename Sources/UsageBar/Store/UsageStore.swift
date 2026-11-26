@@ -455,6 +455,10 @@ final class UsageStore: ObservableObject {
         states[ProviderID.cursor.rawValue] = .ready(UsageSnapshot(provider: .cursor, windows: [
             UsageWindow(id: "monthly", label: "Monthly", percent: 58, resetsAt: now.addingTimeInterval(12 * 86400 + 19 * 3600),
                         windowDuration: 30 * 86400, detail: "$11.60 / $20")], planName: "Pro"))
+        states[ProviderID.antigravity.rawValue] = .ready(UsageSnapshot(provider: .antigravity, windows: [
+            win("gemini-weekly", "Gemini 7d", 31, 7 * 86400, 4 * 86400 + 2 * 3600), win("gemini-5h", "Gemini 5h", 64, 5 * 3600, 3 * 3600 + 5 * 60),
+            win("3p-weekly", "Claude 7d", 8, 7 * 86400, 6 * 86400), win("3p-5h", "Claude 5h", 22, 5 * 3600, 4 * 3600 + 30 * 60)],
+            planName: "Google AI Ultra", note: "Experimental"))
         states[ProviderID.opencode.rawValue] = .ready(UsageSnapshot(provider: .opencode, windows: [
             UsageWindow(id: "today", label: "Today", percent: 0, resetsAt: nil, windowDuration: nil, detail: "1.2M tok · $0", hasLimit: false),
             UsageWindow(id: "7d", label: "7d", percent: 0, resetsAt: nil, windowDuration: nil, detail: "8.4M tok · $0", hasLimit: false)],

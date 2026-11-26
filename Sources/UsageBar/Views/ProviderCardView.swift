@@ -13,7 +13,14 @@ struct ProviderCardView: View {
     private var accountName: String? { store.hasSeveralAccounts(id) ? store.label(account) : nil }
     private var state: ProviderState { store.state(account) }
     private var snapshot: UsageSnapshot? { state.snapshot }
-    private var labelWidth: CGFloat { expanded ? 58 : 46 }
+    /// Wide enough for the card's longest label ("Gemini 5h"), so it never truncates; short
+    /// labels like "5h" keep the usual column and the meters stay aligned across cards.
+    private var labelWidth: CGFloat {
+        let base: CGFloat = expanded ? 58 : 46
+        let font = NSFont.systemFont(ofSize: 12)
+        let widest = (snapshot?.windows ?? []).map { ceil(($0.label as NSString).size(withAttributes: [.font: font]).width) }.max() ?? 0
+        return min(84, max(base, widest + 2))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 5 : 7) {

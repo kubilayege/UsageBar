@@ -64,6 +64,7 @@ struct BehaviorRegression {
         runway.testExhaustionOnlyWhenPaceBeatsTheReset()
         runway.testRunwayRanksBlockedThenSoonestRunOutThenClear()
         try AntigravityTests().testThinkingLevelsFoldIntoOneRowPerModel()
+        AntigravityTests().testQuotaSummaryShowsEachGroupsWindows()
         XCTAssertEqual(SessionProcess.provider(command: "python script.py --prompt claude-code"), nil)
         XCTAssertEqual(SessionProcess.provider(command: "claude --add-dir /tmp/UsageBar"), .claude)
         XCTAssertEqual(SessionProcess.provider(command: "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"), .claude)
